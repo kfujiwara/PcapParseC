@@ -1,0 +1,9 @@
+- Version 0.3, released at June 1, 2012
+
+- Version 0.3.1, released at June 12, 2012
+  - PcapParse.c: Allowed packets larger than 1600 octets.
+  - pcapgetquery: default to output BIND 9 log format
+  - pcapgetquery: fixed BIND 9 log format output.
+  - pcapgetquery: added timezone offset option
+  - Domain name length changed to 1025 because BIND 9 format uses \NNN.
+  - added new tool: Log2pcap

@@ -1,0 +1,274 @@
+#!/bin/perl
+
+# $Id: Log2pcap,v 1.10 2012/06/12 06:58:46 fujiwara Exp $
+#
+# Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
+#
+# Copyright (c) 2012 Japan Registry Servcies Co., Ltd.
+#
+# This file is part of PcapParseC.
+#
+# PcapParseC is free software; you can use, redistribute and/or
+# modify it under the terms of the JPRS OPEN SOURCE CODE LICENSE
+# written in JPRS-OSCL.txt.
+
+use Time::Local;
+use Socket;
+use Socket6;
+
+binmode STDOUT, ":bytes";
+
+my $pcap_file_header = pack("LSSLLLL", 0xa1b2c3d4, 2, 4, 0, 0, 1500, 1);
+my $ether4 = pack("nnnnnnn", 0,0,0,0,0,0,0x800);
+my $ether6 = pack("nnnnnnn", 0,0,0,0,0,0,0x86dd);
+#main
+use strict;
+
+my %s2month;
+$s2month{'jan'} = 1;
+$s2month{'feb'} = 2;
+$s2month{'mar'} = 3;
+$s2month{'apr'} = 4;
+$s2month{'may'} = 5;
+$s2month{'jun'} = 6;
+$s2month{'jul'} = 7;
+$s2month{'aug'} = 8;
+$s2month{'sep'} = 9;
+$s2month{'oct'} = 10;
+$s2month{'nov'} = 11;
+$s2month{'dec'} = 12;
+
+my $rrtype_def = "0,RESERVED0,1,A,NS,MD,MF,CNAME,SOA,MB,MG,MR,NULL,WKS,PTR,HINFO,MINFO,MX,"
+."16,TXT,RP,AFSDB,X25,ISDN,RT,NSAP,NSAP-PTR,SIG,KEY,PX,GPOS,AAAA,LOC,NXT,EID,"
+."32,NIMLOC,SRV,ATMA,NAPTR,KX,CERT,A6,DNAME,SINK,OPT,APL,DS,SSHFP,IPSECKEY,RRSIG,NSEC,"
+."48,DNSKEY,DHCID,NSEC3,NSEC3PARAM,TLSA,"
+."55,HIP,NINFO,RKEY,TALINK,CDS,"
+."99,SPF,UINFO,UID,GID,UNSPEC,"
+."249,TKEY,TSIG,IXFR,AXFR,MAILB,MAILA,ANY,URI,CAA,"
+."32768,TA,DLV,";
+
+my %rr_str2code;
+my $i = 0;
+foreach my $k (split(/,/, $rrtype_def)) {
+    if ($k =~ /^\d+$/) {
+	$i = $k;
+    } else {
+	$rr_str2code{$k} = $i++;
+    }
+}
+
+#foreach my $k (keys(%rr_str2code)) {print $k."...".$rr_str2code{$k}."\n";}     
+
+my $thisyear = 2012;
+
+print $pcap_file_header;
+
+my ($_day, $_month, $_year, $_hour, $_minute, $_second, $_subsec, $_addr, $_port, $_name, $_class, $_type, $_flag, $_server);
+while(<>) {
+	chomp;
+# 30-Jan-2011 00:00:01.852 queries: info: client 192.168.2.2#2582: query: ns.example.jp IN A -EDC (203.119.1.1)
+	if (/^(\d+)-(\S+)-(\d+)\s+(\d\d):(\d\d):(\d\d)\.(\d\d\d)\s+\S+\s+\S+\s+\S+\s+(\S+)#(\d+):\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+\((\S+)\)/) {
+		($_day, $_month, $_year, $_hour, $_minute, $_second, $_subsec, $_addr, $_port, $_name, $_class, $_type, $_flag, $_server) = ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+		# RD=0 if ($_flag =~ /-/)
+		# EDNS0=1 if ($_flag =~ /E/)
+		# DO=1 if ($_flag =~ /D/)
+#Jun  8 12:01:16 <local5.info> f named[749]: client 192.168.1.1#63801: view recursion: query: md-007.com.xs.surbl.org IN A + (192.168.1.1)
+	} elsif (/^(\S+)\s+(\d+)\s+(\d\d):(\d\d):(\d\d) .* client\s+(\S+)#(\d+):\s+.*query:\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+\((\S+)\)/) {
+		($_month, $_day, $_hour, $_minute, $_second, $_addr, $_port, $_name, $_class, $_type, $_flag, $_server) = ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+		$_subsec = 0;
+		$_year = $thisyear;
+	} else {
+		&error($_, "LOGmatch");
+		next;
+	}
+	$_month =~ y/A-Z/a-z/;
+	if (!defined($s2month{$_month})) {
+		&error($_, "Month $_month");
+		next;
+	}
+	$_month = $s2month{$_month};
+
+	my $type = -1;
+	my $class = -1;
+	my $flag = (($_flag =~ /\+/) ? 256 : 0) | (($_flag =~ /C/) ? 16 : 0);
+	my $edns0 = '';
+	if ($_flag =~ /E/) {
+		$edns0 = pack("CnnNn", 0, 41, 4096, (($_flag =~ /D/) ? 0x8000: 0), 0);
+	}
+
+	if (defined($rr_str2code{$_type})) {
+		$type = $rr_str2code{$_type};
+	} elsif ($type =~ /^TYPE(\d+)$/) {
+		$type = $1;
+	}
+	if ($_class eq "IN") {
+		$class = 1;
+	} elsif ($_class eq "ANY") {
+		$class = 255;
+	} elsif ($_class eq "HS") {
+		$class = 2;
+	} elsif ($_class eq "CH") {
+		$class = 3;
+	}
+	if ($class < 0 || $type < 0) {
+		&error($_, "TypeClass $_type/$_class");
+		next;
+	}
+	my $payload = pack("nnnnnn", 1, $flag, 1, 0, 0, $edns0 eq "" ? 0 : 1);
+	my @labels;
+
+#	For speedup.  normal case or illegal case.
+	if ($_name =~ /\\/) {   # broken case takes costs
+		my $rest = $_name;
+		my $k;
+		while ($rest ne "") {
+#print "rest=$rest\n";
+			if ($rest =~ /^(([^\.\\]|\\\.|\\[^0-9]|\\[0-9][0-9][0-9])+)(|\.(.*))$/) {
+				$k = $1;
+				$rest = $4;
+			} elsif ($rest =~ /^([^\.]+)\.(.*)$/) {
+				$k = $1;
+				$rest = $2;
+			} else {
+				$k = $rest;
+				$rest = '';
+			}
+#print "length=".length($k)."      k=$k rest=$rest\n";
+			#$k =~ s/\\(\d\d\d)/chr($1)/eg;
+			#$k =~ s/\\@/@/g;
+			#$k =~ s/\\\\/\\/g;
+			my $result = '';
+			while($k =~ /^([^\\]*)\\(.*)$/) {
+				$result .= $1;
+				$k = $2;
+				if ($k =~ /^(\d\d\d)(.*)$/) {
+					$result .= chr($1);
+					$k = $2;
+				} else {
+					$result .= substr $k, 0, 1;
+					$k = substr $k, 1;
+				}
+			}
+			$k = $result.$k;
+#print "length=".length($k)."      k=$k rest=$rest\n";
+			push @labels, $k;
+		}
+		if ($#labels < 0) {
+			print STDERR "ERROR: $_name\n";
+			exit 1;
+		}
+	} else {
+		foreach my $k (split(/\./, $_name)) {
+			push @labels, $k;
+		}
+	}
+	foreach my $k (@labels) {
+		$payload .= chr(length($k)) . $k;
+	}
+	$payload .= pack("Cnn", 0, $type, $class).$edns0;
+	$payload = pack("nnnn", $_port, 53, length($payload)+8, 0).$payload;
+
+	my $ip_src;
+	my $ip_dst;
+	my $ip;
+	my $ether;
+	my $sum;
+
+	if ($_addr =~ /:/) { #IPv6
+		$ether = $ether6;
+		$ip_src = inet_pton PF_INET6, $_addr;
+		$ip_dst = inet_pton PF_INET6, $_server;
+		$ip = pack("NnCC", 0x60000000, length($payload), 17, 0).$ip_src.$ip_dst;
+	} else {
+		$ether = $ether4;
+		$ip_src = inet_pton PF_INET, $_addr;
+		$ip_dst = inet_pton PF_INET, $_server;
+		$ip = pack("CCnnnCCn", 0x45, 0, length($payload)+20, 0, 0, 0, 17, 0).$ip_src.$ip_dst;
+		$sum = unpack("%32n*", $ip);
+		$sum = ($sum & 0xffff) + ($sum >> 16);
+		$sum = ($sum & 0xffff) + ($sum >> 16);
+		$sum = 65535 - $sum;
+		substr $ip, 10, 2, pack("n", $sum);
+	}
+	$sum = unpack("%32n*", $ip_src.$ip_dst.$payload.chr(0)) + length($payload) + 17;
+	$sum = ($sum & 0xffff) + ($sum >> 16);
+	$sum = ($sum & 0xffff) + ($sum >> 16);
+	$sum = 65535 - $sum;
+	substr $payload, 6, 2, pack("n", $sum);
+
+	my $tv_sec = timelocal($_second, $_minute, $_hour, $_day, $_month - 1, $_year);
+	my $tv_usec = $_subsec * 1000;
+	my $len = length($ip) + length($payload) + 14;
+
+	# tv_sec, tv_usec, caplen, len
+	my $ph = pack("LLLL", $tv_sec, $tv_usec, $len, $len);
+	#&hexdump($ph.$ether.$ip.$payload);
+	print $ph.$ether.$ip.$payload;
+}
+
+sub hexdump
+{
+	my $data = shift;
+	my $msg = shift;
+	my $addr;
+	if ($msg ne '') {
+		print "$msg:";
+	}
+	my $addr = 0;
+	while(length($data) > 0) {
+		if (($addr % 16) == 0) {
+			printf("\n%04x   ", $addr);
+		}
+		$addr++;
+		printf("%02x ", ord(substr($data, 0, 1)));
+		substr($data, 0, 1, '');
+	}
+	printf("\n");
+}
+
+sub error
+{
+	my $line = shift;
+	my $info = shift;
+	print STDERR "ERROR:$info:$line\n";
+}
+
+1;
+
+=head1 NAME
+
+Log2pcap - Convert BIND 9.7 logfile to PCAP file format
+
+=head1 DESCRIPTION
+
+Log2pcap reads BIND 9.7 (or 9.8, 9.9) logfile and outputs PCAP file.
+
+=head1 USAGE
+
+ Log2pcap < logfile > pcapfile
+
+ It outputs error messages to STDERR.
+
+=head1 Bugs and limitations
+
+ This program does not consider any security issues.
+ Be careful if you use this program.
+
+ It uses Time::Local::timelocal to convert time information to unixtime.
+ If you want to control timezone information, set TZ.
+
+ ID=1, ethernet addresses are 0.
+ If the querylog does not contain year information, it treats the year 2012.
+ TCP information is not preserved.
+
+ Too slow. 
+
+=head1 Author
+
+ Kazunori Fujiwara <fujiwara@jprs.co.jp> <fujiwara@wide.ad.jp>
+
+=head1 Copyright and License
+
+ Log2pcap is free software; you can use, redistribute and/or
+ modify it under the terms of the JPRS OPEN SOURCE CODE LICENSE
+ written in JPRS-OSCL.txt.

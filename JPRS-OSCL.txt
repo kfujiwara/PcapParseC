@@ -1,0 +1,129 @@
+                          TERMS AND CONDITIONS
+                                  FOR
+                        OPEN SOURCE CODE LICENSE
+
+Japan Registry Services Co., Ltd. ("JPRS"), a Japanese corporation
+having its head office at Chiyoda First Bldg. East 13F 3-8-1 Nishi-Kanda,
+Chiyoda-ku, Tokyo 101-0065, Japan, grants you the license for open source
+code specified in EXHIBIT A the "Code" subject to the following Terms and
+Conditions ("OSCL").
+
+1. License Grant.
+  JPRS hereby grants you a worldwide, royalty-free, non-exclusive
+  license, subject to third party intellectual property claims:
+  (a) under intellectual property rights (other than patent or
+      trademark) licensable by JPRS to use, reproduce, modify, display,
+      perform, sublicense and distribute the Code (or portions thereof)
+      with or without modifications, and/or as part of a derivative work;
+      or
+  (b) under claims of the infringement through the making, using,
+      offering to sell and/or otherwise disposing the JPRS Revised Code
+      (or portions thereof);
+  (c) the licenses granted in this Section 1(a) and (b) are effective on
+      the date JPRS first distributes the Code to you under the terms of
+      this OSCL;
+  (d) Notwithstanding the above stated terms, no patent license is
+      granted:
+      1)  for a code that you delete from the Code;
+      2)  separate from the Code; or
+      3)  for infringements caused by:
+           i) modification of the Code; or
+          ii) combination of the Code with other software or devices.
+
+2. Consents.
+  You agree that:
+  (a) you must include a copy of this OSCL and the notice set forth in
+      EXHIBIT A with every copy of the Code you distribute;
+  (b) you must include a copy of this OSCL and the notice set forth in
+      EXHIBIT A with every copy of binary form of the Code in the
+      documentation and/or other materials provided with the distribution;
+  (c) you may not offer or impose any terms on any source code version
+      that alters or restricts the applicable version of this OSCL or
+      the recipients' rights hereunder.
+  (d) If the terms and conditions are set forth in EXHIBIT A, you must
+      comply with those terms and conditions.
+
+3. Proprietary Information.
+  All trademarks, service marks, patents, copyrights, trade secrets, and
+  other proprietary rights in or related to the Code are and will remain
+  the exclusive property of JPRS or its licensors, whether or not
+  specifically recognized or perfected under local law except specified
+  in this OSCL; provided however you agree and understand that the JPRS
+  name may not be used to endorse or promote this Code without prior
+  written approval of JPRS.
+
+4. WARRANTY DISCLAIMER.
+  JPRS MAKES NO REPRESENTATIONS AND WARRANTIES REGARDING THE USE OF THE
+  CODE, NOR DOES JPRS MAKE ANY REPRESENTATIONS THAT THE CODE WILL BECOME
+  COMMERCIALLY AVAILABLE. JPRS, ITS AFFILIATES, AND ITS SUPPLIERS DO NOT
+  WARRANT OR REPRESENT THAT THE CODE IS FREE OF ERRORS OR THAT THE CODE
+  IS SUITABLE FOR TRANSLATION AND/OR LOCALIZATION. THE CODE IS PROVIDED
+  ON AN "AS IS" BASIS AND JPRS AND ITS SUPPLIERS HAVE NO OBLIGATION TO
+  CORRECT ERRORS OR TO SUPPORT THE CODE UNDER THIS OSCL FOR ANY REASON.
+  TO THE FULL EXTENT PERMITTED BY LAW, ALL OBLIGATIONS ARE HEREBY
+  EXCLUDED WHETHER EXPRESS, STATUTORY OR IMPLIED UNDER LAW, COURSE OF
+  DEALING, CUSTOM, TRADE USAGE, ORAL OR WRITTEN STATEMENT OR OTHERWISE,
+  INCLUDING BUT NOT LIMITED TO ANY IMPLIED WARRANTIES OF MERCHANTABILITY
+  OR FITNESS FOR A PARTICULAR PURPOSE CONCERNING THE CODE.
+
+5. NO LIABILITY.
+  UNDER NO CIRCUMSTANCES SHALL JPRS AND/OR ITS AFFILIATES, LICENSORS, OR
+  REPRESENTATIVES BE LIABLE FOR ANY DAMAGES INCLUDING BUT NOT LIMITED TO
+  CONSEQUENTIAL, INDIRECT, SPECIAL, PUNITIVE OR INCIDENTAL DAMAGES,
+  WHETHER FORESEEABLE OR UNFORESEEABLE, BASED ON YOUR CLAIMS, INCLUDING,
+  BUT NOT LIMITED TO, CLAIMS FOR LOSS OF DATA, GOODWILL, PROFITS, USE OF
+  MONEY, INTERRUPTION IN USE OR AVAILABILITY OF DATA, STOPPAGE, IMPLIED
+  WARRANTY, BREACH OF CONTRACT, MISREPRESENTATION, NEGLIGENCE, STRICT
+  LIABILITY IN TORT, OR OTHERWISE.
+
+6. Indemnification.
+  You agree at all times to indemnify, defend and hold harmless JPRS,
+  its subsidiaries, affiliates, employees, agents, officers and
+  directors (collectively referred to as the "Indemnified Parties") from
+  and against any claims, losses, judgments, actions, proceedings,
+  damages, costs and expenses (including without limitation, reasonable
+  legal and other fees, costs, and disbursements) incurred by any of the
+  Indemnified Parties or in violation of any law applicable to you or
+  your granted license to use.
+
+7. Termination.
+  This OSCL shall be automatically terminated in the events that:
+  (a) you fail to comply with the terms herein and fail to cure such
+      breach within 30 days of becoming aware of the breach.
+  (b) any part of the Code conceived and developed by a third party
+      directly or indirectly infringes on any patent, copyright or
+      proprietary right. In such event JPRS will announce such
+      infringement at <http://jprs.co.jp/>.
+
+8. General.
+  This OSCL shall be governed by, and construed and enforced in
+  accordance with, the laws of Japan. Any litigation or arbitration
+  between the parties shall be conducted exclusively in Tokyo, Japan
+  except written consent of JPRS provides other venue.
+
+
+                               EXHIBIT A
+
+                       JPRS Public License Notice
+                                  For
+                              PcapParse C.
+
+The contents of this file are subject to the Terms and Conditions for
+the Open Source Code License (the "OSCL"). You may not use this file
+except in compliance with above terms and conditions. A copy of the OSCL
+is available at <http://jprs.co.jp/>.
+The Original Code is PcapParseC.
+The Initial Developer of the Original Code is Japan Registry Services
+Co., Ltd. ("JPRS"), a Japanese corporation having its head office at
+Chiyoda First Bldg. East 13F 3-8-1 Nishi-Kanda, Chiyoda-ku, Tokyo
+101-0065, Japan.
+"Copyright(c) 2012 Japan Registry Service Co., Ltd. All rights reserved."
+Contributor(s): ______________________________________.
+ 
+If you wish to allow use of your version of this file only under the
+above License(s) and not to allow others to use your version of this
+file, please indicate your decision by deleting the relevant provisions
+above and replacing them with the notice and other provisions required
+by the above License(s). If you do not delete the relevant provisions,
+a recipient may use your version of this file under either the above
+License(s).
