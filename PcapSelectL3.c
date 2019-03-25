@@ -1,6 +1,6 @@
 /*
 		nexact++;
-	$Id: PcapCleanup.c,v 1.6 2014/08/05 11:38:41 fujiwara Exp $
+	$Id: PcapSelectL3.c,v 1.14 2019/03/19 08:05:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -59,13 +59,19 @@
 
 #include "PcapParse.h"
 
-int start = -1;
+int begin = -1;
 int end = -1;
 int time_offset = 0;
 int accept_v4 = 0;
 int accept_v6 = 0;
+int accept_frag = 0;
 double exact[100];
 int nexact = 0;
+int opt_v = 0;
+u_char src4[4] = { 255 };
+u_char src6[16] = { 255 };
+u_char dest4[4] = { 255 };
+u_char dest6[16] = { 255 };
 
 /* Ignore UDP fragment */
 /* parse query packet only */
@@ -143,6 +149,10 @@ int _pcap_cleanup(FILE *fp, FILE *wfp)
 	long long offset = 0;
 	long long offset2;
 	int i;
+	int match_time = 0;
+	int match_addr = 0;
+	int match_frag = 0;
+	int ignore;
 	double d;
 	u_char buff[2000], *_ip;
 
@@ -169,6 +179,10 @@ int _pcap_cleanup(FILE *fp, FILE *wfp)
 		return ParsePcap_ERROR_BogusSavefile;
 
 	while((len = fread(&ph, 1, sizeof(ph), fp)) == sizeof(ph)) {
+		match_time = 0;
+		match_addr = 0;
+		match_frag = 0;
+		ignore = 0;
 		offset += len;
 		if (ph.len == 0 || ph.caplen == 0) {
 			ph.ts.tv_usec = ph.caplen;
@@ -210,17 +224,58 @@ int _pcap_cleanup(FILE *fp, FILE *wfp)
 		}
 		_ip = buff + l2header;
 		len = len - l2header;
-		if (start >= 0 && ph.ts.tv_sec < start) continue;
-		if (end >= 0 && ph.ts.tv_sec >= end) continue;
 		d = (double)ph.ts.tv_sec + (double)ph.ts.tv_usec/1000000;
+		if (begin >= 0 || end >= 0) {
+			if (begin >= 0 && ph.ts.tv_sec >= begin) continue;
+			if (end >= 0 && ph.ts.tv_sec >= end) continue;
+			match_time = 1;
+		} else
 		if (nexact > 0) {
 			for (i = 0; i < nexact; i++)
-				if (exact[i] == d)
+				if (exact[i] == d) {
+					match_time = 1;
 					break;
+				}
 			if (i >= nexact)
 				continue;
+		} else {
+			match_time = 1;
 		}
-		printf("writing: %d.%06d %d bytes\n", ph.ts.tv_sec, ph.ts.tv_usec, len);
+		if (accept_frag) {
+			// Test Fragment
+			if (_ip[0] >> 4 == 4 && (((_ip[6]<<8)|_ip[7]) & 0x3fff) != 0) {
+				match_frag = 1;
+			} else
+			if (_ip[0] >> 6 && _ip[6] == 44) {
+				match_frag = 1;
+			}
+		} else {
+			match_frag = 1;
+		}
+		if ((*src4 & *src6 & *dest4 & *dest6) == 255) {
+		   	match_addr = 1;
+		} else {
+			if ((_ip[0]>>4) == 4) {
+				if ((*src4 & *dest4) == 255)
+					ignore++;
+				if (src4[0]!=255 && memcmp(src4,_ip+12,4) != 0)
+					ignore++;
+				if (dest4[0]!=255 && memcmp(dest4,_ip+16,4)!=0)
+				   	ignore++;
+			}
+			else
+			if ((_ip[0]>>4) == 6) {
+				if ((*src6 & *dest6) == 255)
+					ignore++;
+				if (src6[0] != 255 && memcmp(src6, _ip+8, 16) != 0)
+					ignore++;
+				if (dest6[0] != 255 && memcmp(dest6, _ip+24, 16) != 0)
+					ignore++;
+			}
+			match_addr = (ignore == 0) ? 1 : 0;
+		}
+		if (!match_time || !match_frag || !match_addr) continue;
+		if (opt_v) printf("writing: %d.%06d %d bytes\n", ph.ts.tv_sec, ph.ts.tv_usec, len);
 		ph.ts.tv_sec += time_offset;
 		ph.caplen = len;
 		ph.len = len;
@@ -243,21 +298,21 @@ int pcap_cleanup(char *file, FILE *wfp)
 		return _pcap_cleanup(stdin, wfp);
 	len = strlen(file);
 	if (len > 3 && strcmp(file+len-4, ".xz") == 0) {
-		snprintf(buff, sizeof buff, "xz -cd < %s", file);
+		snprintf(buff, sizeof buff, "xz -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _pcap_cleanup(fp, wfp);
 		pclose(fp);
 	} else
 	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
-		snprintf(buff, sizeof buff, "bzip2 -cd < %s", file);
+		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _pcap_cleanup(fp, wfp);
 		pclose(fp);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
-		snprintf(buff, sizeof buff, "gzip -cd < %s", file);
+		snprintf(buff, sizeof buff, "gzip -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _pcap_cleanup(fp, wfp);
@@ -293,7 +348,20 @@ char *pcap_cleanup_error(int errorcode)
 
 void usage(int c)
 {
-	printf("PcapCleanup [-T timezone offset] [-s start] [-e end] [-E exact_match_time] OutputFile InputFiles....\n");
+	printf("PcapSelectL3 [-T timezone offset] options OutputFile InputFiles....\n"
+"time options: if specified, only matched packet will be written.\n"
+"  -b begin\n"
+"  -e end\n"
+"  -E exact_match_time (multiple, max 10)\n"
+"address options: if specified, only matched packet will be written.\n"
+"                 source & dest\n"
+"  -s IPv4_source\n"
+"  -d IPv4_destination\n"
+"  -S IPv6_source\n"
+"  -D IPv6_destination\n"
+"fragment\n"
+"  -f\n");
+
 	exit(0);
 }
 
@@ -308,8 +376,11 @@ int main(int argc, char *argv[])
 	struct pcap_file_header pfw;
 
 	bflag = 0;
-	while ((ch = getopt(argc, argv, "s:e:T:E:46")) != -1) {
+	while ((ch = getopt(argc, argv, "vb:e:T:E:46fs:S:d:D:")) != -1) {
 	switch (ch) {
+	case 'f':
+		accept_frag = 1;
+		break;
 	case '4':
 		accept_v4 = 1;
 		break;
@@ -319,8 +390,8 @@ int main(int argc, char *argv[])
 	case 'e':
 		end = atoi(optarg);
 		break;
-	case 's':
-		start = atoi(optarg);
+	case 'b':
+		begin = atoi(optarg);
 		break;
 	case 'T':
 		time_offset = atoi(optarg);
@@ -329,18 +400,35 @@ int main(int argc, char *argv[])
 		exact[nexact++] = atof(optarg);
 		/*printf("-E %s is parsed as tv_sec=%d tv_usec=%d\n", optarg, exact_time_sec, exact_time_usec);*/
 		break;
+	case 's':
+		if (inet_aton(optarg, (struct in_addr *)&src4) == 0)
+			err(1, "bad IPv4 address: %s", optarg);
+		break;
+	case 'S':
+		if (inet_pton(AF_INET6, optarg, src6) != 1)
+			err(1, "bad IPv6 address: %s", optarg);
+		break;
+	case 'd':
+		if (inet_aton(optarg, (struct in_addr *)&dest4) == 0)
+			err(1, "bad IPv4 address: %s", optarg);
+		break;
+	case 'D':
+		if (inet_pton(AF_INET6, optarg, dest6) != 1)
+			err(1, "bad IPv6 address: %s", optarg);
+		break;
 	case 'v':
-		usage(-1);
+		opt_v = 1;
+		break;
 	case '?':
 	default:
-		usage(ch);
+		usage(-1);
 	}}
 	argc -= optind;
 	argv += optind;
 	if (accept_v4 == 0 && accept_v6 == 0) {
 	  accept_v4 = 1; accept_v6 = 1;
 	}
-	if (argc < 1) { printf("#Error:No outputfilename\n"); exit(1); };
+	if (argc < 1) { usage(-1); }
 	if ((wfp = fopen(*argv, "w")) == NULL) {
 		printf("#Wrror:Cannot write %s", *argv); exit(1);
 	}
