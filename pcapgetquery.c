@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.73 2017/01/13 04:03:44 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.85 2019/03/12 11:55:11 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -82,6 +82,10 @@ struct counter {
 
 u_int32_t server_ipv4 = 0;
 u_char server_ipv6[16] = { 255 };
+u_char src4[4] = { 255 };
+u_char src6[16] = { 255 };
+u_char dest4[4] = { 255 };
+u_char dest6[16] = { 255 };
 
 struct filter_addr_mask4 {
 	u_int32_t addr;
@@ -113,6 +117,7 @@ int repeat_threshold = -1;
 int repeated_detection_by_ttl = 0;
 int report_repeated_queries = 0;
 int print_queries_bind9 = 0;
+int print_queries_csv_old = 0;
 int print_queries_csv = 0;
 int print_query_counter = 0;
 int print_response_detail = 0;
@@ -122,8 +127,8 @@ int print_repeated_list = 0;
 int entries = 0;
 int parsed_queries = 0;
 int do_print_dns_answer = 0;
-int ignore_udp = 0;
-int ignore_tcp = 0;
+int udp_only = 0;
+int tcp_only = 0;
 int print_filename = 0;
 u_int32_t t_start = 0;
 u_int32_t t_end = 0;
@@ -133,6 +138,12 @@ int flag_print_ednsopt = 0;
 int flag_checksumerror_only = 0;
 int flag_print_error = 0;
 int flag_wide_cloud = 0;
+int flag_clientmode = 0;
+int flag_print_labels = 0;
+int flag_greater_than = 0;
+int count_printed = 0;
+int count_notprinted = 0;
+
 u_char wide_cloud_prefix[] = { 0x20, 0x01, 0x02, 0x00, 0x0d, 0x00, 0x01, 0x00, 0,0,0,0 };
 
 u_int32_t data_start = 0;
@@ -340,13 +351,20 @@ int callback(struct DNSdataControl *d, int mode)
 #ifdef HAVE_APR_HASH_H
 	struct ipaddr_list *e;
 #endif
+	char s_src[256];
+	char s_dst[256];
 	char additional[40] = "";
 	char additional2[4096] = "";
 
 	if (mode == CALLBACK_ADDRESSCHECK) {
 		/* Dest addr != server_ipc4 */
+	    if (d->dns.version == 4 && src4[0] != 255 && memcmp(src4, &d->dns.p_src, 4) != 0) return 0;
+	    if (d->dns.version == 6 && src6[0] != 255 && memcmp(src4, &d->dns.p_src, 16) != 0) return 0;
+	    if (d->dns.version == 4 && dest4[0] != 255 && memcmp(dest4, &d->dns.p_dst, 4) != 0) return 0;
+	    if (d->dns.version == 6 && dest6[0] != 255 && memcmp(dest4, &d->dns.p_dst, 16) != 0) return 0;
+	    if (flag_clientmode == 0) {
 		if (d->dns.version == 4) {
-			if (check_v4 == 0) return 1;
+			if (check_v4 == 0) return 0;
 			if (server_ipv4 != 0 && server_ipv4 != *(u_int32_t *)(d->dns.req_dst)) return 0;
 			if (d->dns.req_dport != 53) return 0;
 			if (nv4mask != 0) {
@@ -364,12 +382,25 @@ int callback(struct DNSdataControl *d, int mode)
 					return 0;
 			}
 		} else if (d->dns.version == 6) {
-			if (check_v6 == 0) return 1;
+		if (check_v6 == 0) return 0;
 			if (server_ipv6[0] != 255 && memcmp(server_ipv6, d->dns.req_dst, 16) != 0)
 				return 0;
 			if (d->dns.req_dport != 53) return 0;
 		}
 		return 1;
+	    } else {
+		if (d->dns.version == 4) {
+			if (check_v4 == 0) return 0;
+			if (server_ipv4 != 0 && server_ipv4 != *(u_int32_t *)(d->dns.req_src)) return 0;
+			if (d->dns.req_dport != 53) return 0;
+		} else if (d->dns.version == 6) {
+			if (check_v6 == 0) return 0;
+			if (server_ipv6[0] != 255 && memcmp(server_ipv6, d->dns.req_src, 16) != 0)
+				return 0;
+			if (d->dns.req_dport != 53) return 0;
+		}
+		return 1;
+	    }
 	}
 	if (data_start != 0 && d->dns.tv_sec < data_start) {
 		return 0;
@@ -412,8 +443,8 @@ int callback(struct DNSdataControl *d, int mode)
 		}
 	}
 
-	if (ignore_udp && d->dns._transport_type == T_UDP) return 0;
-	if (ignore_tcp && d->dns._transport_type == T_TCP) return 0;
+	if (tcp_only && d->dns._transport_type < T_TCP) return 0;
+	if (udp_only && d->dns._transport_type >= T_TCP) return 0;
 
 	if (flag_filter_ednsopt != 0 && d->dns._edns_rdlen == 0)
 		return 0;
@@ -444,18 +475,50 @@ int callback(struct DNSdataControl *d, int mode)
 	if (print_filename) {
 		snprintf(p, len, "filename=%s", d->filename);
 	}
-	if (print_queries_csv) {
-		printf("%d.%06d,"
+	if (print_queries_csv_old) {
+#define CSV_OLD_STR "timestamp,adr,port,qname,qclass,qtype,id,qr,rd,edns0,error,rcode,ans_ttl,cname_ttl,cname,a_aaaa,dnslen,transport"
+ 		printf("%d.%06d,"
 			"%s,%d,"
-			"%s,%d,%d,"
-			"%d,%d,%d,"
-			"%d,%d,%d,"
-			"%d,%d,%s,",
+ 			"%s,%d,%d,"
+ 			"%d,%d,%d,"
+ 			"%d,%d,%d,"
+ 			"%d,%d,%s,",
+ 			d->dns.tv_sec, d->dns.tv_usec,
+			flag_clientmode == 0 ? d->dns.s_src : d->dns.s_dst,
+ 			flag_clientmode == 0 ? d->dns.p_sport : d->dns.p_dport,
+ 			d->dns.qname, d->dns.qclass, d->dns.qtype,
+ 			d->dns._id, d->dns._qr, d->dns._rd,
+			d->dns._edns0 ? d->dns.edns0udpsize : 0, d->dns.error, d->dns._rcode,
+			d->dns.answer_ttl, d->dns.cname_ttl, d->dns.cnamelist);
+		for (i = 0; i < d->dns.n_ans_v4; i++) {
+			inet_ntop(AF_INET, d->dns.ans_v4[i], addrstr, sizeof(addrstr));
+			printf("%s/", addrstr);
+		}
+		for (i = 0; i < d->dns.n_ans_v6; i++) {
+			inet_ntop(AF_INET6, d->dns.ans_v6[i], addrstr, sizeof(addrstr));
+			printf("%s/", addrstr);
+		}
+		printf(",%d,%d\n", d->dns.dnslen, d->dns._transport_type);
+	} else
+	if (print_queries_csv) {
+	    if (flag_greater_than < d->dns.dnslen) {
+		inet_ntop(d->dns.af, d->dns.p_src, s_src, sizeof(s_src));
+		inet_ntop(d->dns.af, d->dns.p_dst, s_dst, sizeof(s_dst));
+#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,qname,qclass,qtype,id,qr,rd,edns0,error,rcode,dnslen,trnsport,FragSize,ans_ttl,cname_ttl,cname,a_aaaa"
+		printf("%d.%06d,"       // timestamp
+			"%s,%d,%s,%d,"	// source, dest
+			"%s,%d,%d,"	// qname qclass qtype
+			"%d,%d,%d,"	// id qr rd
+			"%d,%d,%d,"	// edns0 error rcode
+			"%d,%d,%d,"	// dnslen transport_type
+			"%d,%d,%s,",	// ans_ttl cname_ttl cnamelist
 			d->dns.tv_sec, d->dns.tv_usec,
-			d->dns.s_src, d->dns.req_sport,
+			s_src, d->dns.p_sport,
+			s_dst, d->dns.p_dport,
 			d->dns.qname, d->dns.qclass, d->dns.qtype,
 			d->dns._id, d->dns._qr, d->dns._rd,
-			d->dns._edns0, d->dns.error, d->dns._rcode,
+			d->dns._edns0 ? d->dns.edns0udpsize : 0, d->dns.error, d->dns._rcode,
+		        d->dns.dnslen, d->dns._transport_type, d->dns._fragSize,
 			d->dns.answer_ttl, d->dns.cname_ttl, d->dns.cnamelist);
 		for (i = 0; i < d->dns.n_ans_v4; i++) {
 			inet_ntop(AF_INET, d->dns.ans_v4[i], addrstr, sizeof(addrstr));
@@ -466,7 +529,11 @@ int callback(struct DNSdataControl *d, int mode)
 			printf("%s/", addrstr);
 		}
 		printf("\n");
-	}
+		count_printed++;
+	    } else {
+		count_notprinted++;
+	    }
+	} else
 	if (print_queries_bind9) {
 		ttt = d->dns.tv_sec + tz_offset;
 		t = gmtime(&ttt);
@@ -497,7 +564,7 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.qname,
 	 		d->dns.qname, classstr, typestr,
 	 		d->dns._rd ? "+" : "-", d->dns._edns0?"E":"",
- 	 		d->dns._transport_type==T_TCP?"T":"",
+ 	 		d->dns._transport_type>=T_TCP?"T":"",
 	 		d->dns._do?"D":"", d->dns._cd ? "C":"",
 	 		*d->dns.s_dst==0?"":"(",
 			d->dns.s_dst,
@@ -588,38 +655,44 @@ void usage(int c)
 "\n"
 "Usage: pcapgetquery [options] pcap files...\n"
 "\n"
-"	-X	Scan and print first and last timestamp\n"
-"	-A	Parse response packets\n"
-"	-A -A	Print DNS answer\n"
+"-X	Scan and print first and last timestamp\n"
+"-A	Parse response packets\n"
+"-A -A	Print DNS answer\n"
 "\n"
-"	-L	Print queries in BIND 9 querylog format\n"
-"	-C	Print queries in CSV format\n"
-"	-q NN	Print query counter in each NN second\n"
+"-L	Print queries in BIND 9 querylog format\n"
+"-C	Print queries in CSV format\n"
+"-q NN	Print query counter in each NN second\n"
 "\n"
-"	-D num	Debug flag\n"
-"	-t num  Specify timezone offset (in second)\n"
-"	-4 v4	Specify DNS server's IPv4 address\n"
-"	-e v4	Specify IPv4 address of excluded client\n"
-"	-m v4	Specify netmask for -a option\n"
-"	-a v4	Specify allowed client address prefix\n"
-"	-R      Print response detail\n"
-"	-o off	Timezone read offset\n"
-"	-S	print statistics\n"
-"	-f	print filename\n"
-"	-R	print response detail\n"
-"	-U	ignore udp\n"
-"	-T	ignore TCP\n"
-"	-E	Print packets with EDNS0 option only\n"
-"	-O	Print EDNS0 option\n"
-"	-g	Print Checksum Error\n"
-"	-c	Print packets with checksum error only\n"
-"	-s time	Dsta start time\n"
-"	-l len	Data length\n"
-"	-I file Load IPaddrlist and print packets whose source address matches\n"
+"-F num	Debug flag\n"
+"-t num  Specify timezone offset (in second)\n"
+"-4 v4	Specify DNS server's IPv4 address\n"
+"-e v4	Specify IPv4 address of excluded client\n"
+"-m v4	Specify netmask for -a option\n"
+"-a v4	Specify allowed client address prefix\n"
+"-z	parse client side queries\n"
+"-R      Print response detail\n"
+"-o off	Timezone read offset\n"
+"-s	Specify source IPv4 address\n"
+"-S	Specify source IPv6 address\n"
+"-d	Specify source IPv4 address\n"
+"-D	Specify source IPv6 address\n"
+"-f	print filename\n"
+"-R	print response detail\n"
+"-U	UDP only\n"
+"-T	TCP only\n"
+"-E	Print packets with EDNS0 option only\n"
+"-O	Print EDNS0 option\n"
+"-g	Print Checksum Error\n"
+"-c	Print packets with checksum error only\n"
+"-b time	Dsta start time\n"
+"-l len	Data length\n"
+"-I file Load IPaddrlist and print packets whose source address matches\n"
 "\n"
-"	-s	Print statistics\n"
-"	-W	decode WIDE cloud address\n"
-"	-r RD	specify RD=0 or RD=1 or -1:any\n"
+"-Y	Print statistics\n"
+"-Z	Print label\n"
+"-W	decode WIDE cloud address\n"
+"-z      Client mode: -4/-6 specifies client IP addr, serverIPaddr is printed\n"
+"-r RD	specify RD=0 or RD=1 or -1:any\n"
 ,VERSION, __DATE__, __TIME__);
 	exit(1);
 }
@@ -652,21 +725,35 @@ int main(int argc, char *argv[])
 	memset(&c, 0, sizeof(c));
 
 	bflag = 0;
-	while ((ch = getopt(argc, argv, "t:4:6:e:m:a:q:CD:AQLo:SRThvUfs:l:EOcgI:Wr:X")) != -1) {
+	while ((ch = getopt(argc, argv, "t:4:6b::e:m:a:q:BCYF:AQLo:SRThvUfl:EOcgI:Wr:XzZG:s:S:d:d:")) != -1) {
 	switch (ch) {
 	case '4':
 		if (inet_aton(optarg, (struct in_addr *)&server_ipv4) == 0)
 			err_exit(1, "bad IPv4 address: %s", optarg);
 		check_v4 = 1;
 		break;
-#if defined(AF_INET6) && defined(HAVE_INET_PTON)
 	case '6':
 		if (inet_pton(AF_INET6, optarg, server_ipv6) != 1)
 			err_exit(1, "bad IPv6 address: %s", optarg);
 		check_v6 = 1;
 		addresscheck = 1;
 		break;
-#endif
+	case 's':
+		if (inet_aton(optarg, (struct in_addr *)&src4) == 0)
+			err_exit(1, "bad IPv4 address: %s", optarg);
+		break;
+	case 'S':
+		if (inet_pton(AF_INET6, optarg, src6) != 1)
+			err_exit(1, "bad IPv6 address: %s", optarg);
+		break;
+	case 'd':
+		if (inet_aton(optarg, (struct in_addr *)&dest4) == 0)
+			err_exit(1, "bad IPv4 address: %s", optarg);
+		break;
+	case 'D':
+		if (inet_pton(AF_INET6, optarg, dest6) != 1)
+			err_exit(1, "bad IPv6 address: %s", optarg);
+		break;
 	case 'e':
 		if (inet_aton(optarg, (struct in_addr *)&exclude4[nexclude4]) == 0)
 			err_exit(1, "bad IPv4 address: %s", optarg);
@@ -685,9 +772,8 @@ int main(int argc, char *argv[])
 		nv4mask++;
 		check_v4 = 1;
 		break;
-	case 'C':
-		print_queries_csv = 1;
-		break;
+	case 'C': print_queries_csv_old = 1; break;
+	case 'B': print_queries_csv = 1; break;
 	case 'L':
 		print_queries_bind9++;
 		debug |= FLAG_BIND9LOG;
@@ -698,77 +784,42 @@ int main(int argc, char *argv[])
 		counter.prev = 0;
 		print_query_counter = 1;
 		break;
-	case 'D':
-		debug = atoi(optarg);
-		break;
-	case 't':
-		tz_offset = atoi(optarg);
-		break;
-	case 'o':
-		c.tz_read_offset = atoi(optarg);
-		break;
-	case 'Q':
-		debug |= FLAG_MODE_PARSE_QUERY;
-		break;
+	case 'F': debug = atoi(optarg); break;
+	case 't': tz_offset = atoi(optarg); break;
+	case 'o': c.tz_read_offset = atoi(optarg); break;
+	case 'Q': debug |= FLAG_MODE_PARSE_QUERY; break;
 	case 'A':
 		debug |= FLAG_MODE_PARSE_ANSWER | FLAG_ANSWER_TTL_CNAME_PARSE;
 		do_print_dns_answer++;
 		break;
-	case 'S':
-		print_statistics = 1;
-		break;
-	case 'f':
-		print_filename = 1;
-		break;
-	case 'R':
-		print_response_detail = 1;
-		break;
-	case 'U':
-		ignore_udp = 1;
-		break;
-	case 'T':
-		ignore_tcp = 1;
-		break;
-	case 'h':
-		usage(-1);
-		break;
-	case 'v':
-		flag_v = 1;
-		break;
+	case 'Y': print_statistics = 1; break;
+	case 'f': print_filename = 1; break;
+	case 'R': print_response_detail = 1; break;
+	case 'U': udp_only = 1; break;
+	case 'T': tcp_only = 1; break;
+	case 'h': usage(-1); break;
+	case 'v': flag_v = 1; break;
 	case 'E':
 		flag_filter_ednsopt = 1;
 		flag_print_ednsopt = 1;
 		break;
-	case 'O':
-		flag_print_ednsopt = 1;
-		break;
-	case 'g':
-		flag_print_error = 1;
-		break;
-	case 'c':
-		flag_checksumerror_only++;
-		break;
-	case 's':
-		data_start = atoi(optarg);
-		break;
-	case 'l':
-		data_time_length = atoi(optarg);
-		break;
-	case 'I':
-		load_ipaddrlist(optarg);
-		break;
-	case 'W':
-		flag_wide_cloud = 1;
-		break;
+	case 'O': flag_print_ednsopt = 1; break;
+	case 'g': flag_print_error = 1; break;
+	case 'c': flag_checksumerror_only++; break;
+	case 'b': data_start = atoi(optarg); break;
+	case 'l': data_time_length = atoi(optarg); break;
+	case 'I': load_ipaddrlist(optarg); break;
+	case 'W': flag_wide_cloud = 1; break;
 	case 'r':
 		select_rd = atoi(optarg);
 		if (select_rd < -1 || select_rd > 1 || 
 			(select_rd == 0 && *optarg != '0'))
 			usage(ch);
 		break;
-	case 'X':
-		debug = FLAG_SCANONLY;
-		break;
+	case 'X': debug = FLAG_SCANONLY; break;
+	case 'z': flag_clientmode = 1; break;
+	case 'Z': flag_print_labels = 1; break;
+	case 'G': flag_greater_than = atoi(optarg); break;
 	case '?':
 	default:
 		usage(ch);
@@ -777,14 +828,21 @@ int main(int argc, char *argv[])
 	argv += optind;
 	if ((debug & (FLAG_MODE_PARSE_QUERY|FLAG_MODE_PARSE_ANSWER)) == 0)
 		debug |= FLAG_MODE_PARSE_QUERY;
-	if (check_v4 != 0 || check_v6 != 0) {
+	if (check_v4 != 0 || check_v6 != 0 || src4[0] != 255 || src6[0] != 255 || dest4[0] != 255 || dest6[0] != 255) {
 		debug |= FLAG_DO_ADDRESS_CHECK;
 	}
-	if (print_query_counter == 0 && print_queries_csv == 0 && print_queries_bind9 == 0) {
+	if (print_query_counter == 0 && print_queries_csv == 0 && print_queries_csv_old == 0 && print_queries_bind9 == 0) {
 		print_queries_bind9 = 1;
 		debug |= FLAG_BIND9LOG;
 	}
-
+	if (flag_print_labels) {
+		if (print_queries_csv) {
+			printf(CSV_STR "\n");
+		} else
+		if (print_queries_csv_old) {
+			printf(CSV_OLD_STR "\n");
+		}
+	}
 	if (data_start != 0 && data_time_length != 0)
 		data_end = data_start + data_time_length;
 
@@ -814,7 +872,12 @@ int main(int argc, char *argv[])
 		usage(0);
 	}
 	if (print_statistics) {
-		Print_PcapStatistics(&c);
+		if (print_queries_csv) {
+			printf("#Number,print/notprint/total,%d,%d,%d\n",
+				count_printed, count_notprinted, count_printed+count_notprinted);
+		} else {
+			Print_PcapStatistics(&c);
+		}
 	}
 	return 0;
 }
