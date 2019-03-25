@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.54 2017/10/13 01:59:41 fujiwara Exp $
+	$Id: PcapParse.h,v 1.57 2019/02/20 11:56:25 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -74,6 +74,7 @@ struct DNSdata
   int qtype;
   int qclass;
   u_int16_t edns0udpsize;
+  u_int16_t _fragSize;
   u_char _edns0;
   u_char _ednsver;
   u_short _edns_rdlen;
@@ -227,15 +228,16 @@ enum {
 
 	ParsePcap_IPv4ChecksumError = 1,
 	ParsePcap_UDPchecksumError = 2,
-	ParsePcap_IPv6LengthError = 4,
-	ParsePcap_EDNSError = 8,
-	ParsePcap_DNSError = 16,
-	ParsePcap_AnswerAnalysisError = 32,
-	ParsePcap_CnameError = 64
+	ParsePcap_TCPError = 4,
+	ParsePcap_IPv6LengthError = 8,
+	ParsePcap_EDNSError = 16,
+	ParsePcap_DNSError = 32,
+	ParsePcap_AnswerAnalysisError = 64,
+	ParsePcap_CnameError = 128
 };
 
 enum {
-T_UDP = 1, T_UDP_FRAG = 2, T_TCP = 3, T_TCP_FRAG = 4
+T_UDP = 1, T_UDP_FRAG = 2, T_TCP = 3, T_TCP_FRAG = 4, T_TCP_PARTIAL = 5,
 };
 
-#define	TransportTypeStr { "Unknown", "UDP", "UDP_FRAG", "TCP", "TCP_FRAG" }
+#define	TransportTypeStr { "Unknown", "UDP", "UDP_FRAG", "TCP", "TCP_FRAG", "TCP_Partial" }

@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.117 2018/05/11 02:22:10 fujiwara Exp $
+	$Id: PcapParse.c,v 1.125 2019/02/25 06:53:37 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -275,7 +275,7 @@ int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, int bind9logmod
 static u_char _count[] = { 0, 1, 0, 0, 0, 0, 0 };
 static u_char _edns0[] = { 0, 0, 41 };
 
-#define TCPBUF_BUFFLEN 512
+#define TCPBUF_BUFFLEN 4096
 #define TCPBUF_HEADERLEN 128
 #define TCPBUF_LEN 10
 
@@ -427,12 +427,6 @@ void parse_DNS_query(struct DNSdataControl *d)
 	d->dns.req_dport = d->dns.p_dport;
 	d->dns.req_src = d->dns.p_src;
 	d->dns.req_dst = d->dns.p_dst;
-
-	d->dns._qr = (d->dns.dns[2] & 0x80) != 0;
-	if (d->dns._qr != 0) {
-		d->ParsePcapCounter._dns_response++;
-		return; /* require QR=0, OP=0, RD=1 */
-	}
 
 	d->ParsePcapCounter._dns_query++;
 	if ((d->debug & FLAG_NO_INETNTOP) == 0) {
@@ -614,11 +608,6 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	u_char *current;
 	int found;
 
-	d->dns._qr = (d->dns.dns[2] & 0x80) != 0;
-	if (d->dns._qr == 0) {
-		d->ParsePcapCounter._dns_query++;
-		return;
-	}
 	d->ParsePcapCounter._dns_response++;
 
 	d->dns.req_sport = d->dns.p_dport;
@@ -797,6 +786,17 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	(void)(d->callback)(d, CALLBACK_PARSED);
 }
 
+void parse_DNS(struct DNSdataControl *d)
+{
+	d->dns._qr = (d->dns.dns[2] & 0x80) != 0;
+	if (d->dns._qr != 0 && (d->debug & FLAG_MODE_PARSE_ANSWER) != 0) {
+		parse_DNS_answer(d);
+	}
+	if (d->dns._qr == 0 && (d->debug & FLAG_MODE_PARSE_QUERY) != 0) {
+		parse_DNS_query(d);
+	}
+}
+
 void parse_UDP(struct DNSdataControl *d)
 {
 	u_int32_t sum;
@@ -830,13 +830,8 @@ void parse_UDP(struct DNSdataControl *d)
 		}
 	}
 	d->dns.dns = d->dns.protoheader + 8;
-	d->dns.dnslen = d->dns.protoheader[4] * 256 + d->dns.protoheader[5];
-	if (d->debug & FLAG_MODE_PARSE_ANSWER) {
-		parse_DNS_answer(d);
-	}
-	if (d->debug & FLAG_MODE_PARSE_QUERY) {
-		parse_DNS_query(d);
-	}
+	d->dns.dnslen = d->dns.protoheader[4] * 256 + d->dns.protoheader[5] - 8;
+	parse_DNS(d);
 }
 
 void parse_TCP(struct DNSdataControl *d)
@@ -844,6 +839,8 @@ void parse_TCP(struct DNSdataControl *d)
 	int data_offset;
 	int datalen;
 	int max, found, free, j;
+	int flag;
+	int syn;
 	u_char *p;
 
 	d->dns.p_sport = d->dns.protoheader[0] * 256 + d->dns.protoheader[1];
@@ -851,10 +848,21 @@ void parse_TCP(struct DNSdataControl *d)
 	data_offset = (d->dns.protoheader[12] >> 4) * 4;
 	d->dns.dns = d->dns.protoheader + data_offset;
 	datalen = d->dns.endp - d->dns.dns;
-	if (d->dns.protoheader[13] & 4 || datalen <= 0) {
+	if ((d->dns.protoheader[12] >> 4) != 5 || datalen < 0) {
+		d->dns.error |= ParsePcap_TCPError;
+		return;
+	}
+#if 0
+	if (datalen < 0) { printf("Error:datalen=%d d->dns.len=%d file=%s ts=%ld.%6d\n", datalen, d->dns.len, d->filename, d->dns.tv_sec, d->dns.tv_usec); hexdump("", d->dns._ip, d->dns.len); fflush(stdout); }
+#endif
+	flag = d->dns.protoheader[13];
+	syn = flag & 2;
+#if 0
+	if (flag & 4 || datalen <= 0) {
 		d->ParsePcapCounter._tcpbuff_zerofin++;
 		return;
 	}
+#endif
 	if (tcpbuff_used < 0) {
 		memset(&tcpbuff, 0, sizeof(tcpbuff));
 		tcpbuff_used = 0;
@@ -890,6 +898,12 @@ void parse_TCP(struct DNSdataControl *d)
 				break;
 			}
 		} else {
+#if 0
+hexdump("tcpbuf:", tcpbuff[j].header, 44);
+hexdump("p_src", d->dns.p_src, 16);
+hexdump("p_dst", d->dns.p_dst, 16);
+hexdump("proto", d->dns.protoheader, 4);
+#endif
 			if (memcmp(d->dns.p_src, tcpbuff[j].header+8, 16) == 0
 			&& memcmp(d->dns.p_dst, tcpbuff[j].header+24, 16) == 0
 			&& memcmp(d->dns.protoheader, tcpbuff[j].header+40, 4) == 0) {
@@ -900,6 +914,46 @@ void parse_TCP(struct DNSdataControl *d)
 	}
 	if (found < 0 && max + 1 < tcpbuff_used)
 		tcpbuff_used = max+1;
+	if (syn) {
+		if (found < 0 && free < 0) {
+			if (tcpbuff_used < tcpbuff_max)
+				free = tcpbuff_used;
+			else
+				free = random() % tcpbuff_max;
+		}
+		if (d->debug & FLAG_DEBUG_TCP)
+			printf("#INFO_TCP:SYN:datalen=%d, free=%d found=%d\n", datalen, free, found);
+		if (found >= 0) free = found;
+		if (datalen > 2 + 12) {
+			j = d->dns.dns[0] * 256 + d->dns.dns[1];
+			if ((j == datalen - 2) || (datalen > 500 && j >= datalen - 2)) {
+				if (j != datalen - 2) d->dns._transport_type = T_TCP_PARTIAL;
+				datalen -= 2;
+				d->dns.dns += 2;
+				d->dns.dnslen = j;
+				d->ParsePcapCounter._tcp_query++;
+				if (d->debug & FLAG_DEBUG_TCP) {
+					printf("#INFO_TCP:First:datalen=%d, dnslen=%d\n", datalen, j);
+				}
+				parse_DNS(d);
+				return;
+			}
+		}
+		tcpbuff[free].used = 1;
+		tcpbuff[free].timestamp = d->dns.tv_sec;
+		memcpy(tcpbuff[free].header, d->dns._ip, d->dns.len - datalen);
+		memcpy(tcpbuff[free].buff, d->dns.dns, datalen);
+		tcpbuff[free].headerlen = d->dns.len - datalen;
+		tcpbuff[free].datalen = datalen;
+		tcpbuff[free].count = 1;
+		if (tcpbuff_used <= free) tcpbuff_used = free+1;
+		if (d->debug & FLAG_DEBUG_TCP) {
+			printf("#INFO_TCP:FirstBuff:datalen=%d, inserted=%d tcpbuff_used=%d\n", datalen, free, tcpbuff_used);
+		}
+		return;
+	}
+	if (d->debug & FLAG_DEBUG_TCP)
+		printf("#INFO_TCP:NoSYN:datalen=%d, free=%d found=%d\n", datalen, free, found);
 	if (found >= 0) {
 		if (datalen <= tcpbuff[found].datalen) {
 			if (memcmp(tcpbuff[found].buff+tcpbuff[found].datalen-datalen, d->dns.dns, datalen)==0) {
@@ -921,61 +975,26 @@ void parse_TCP(struct DNSdataControl *d)
 		p = tcpbuff[found].buff;
 		d->ParsePcapCounter._tcpbuff_merged++;
 		j = p[0] * 256 + p[1];
+		d->dns.dnslen = j;
+		d->dns.dns = tcpbuff[found].buff + 2;
+		d->dns.endp = tcpbuff[found].buff + tcpbuff[found].datalen;
+		if (d->debug & FLAG_DEBUG_TCP) {
+			printf("#INFO_TCP:Found:datalen=%d, dnslen=%d\n", tcpbuff[found].datalen, j);
+		}
 		if (j == tcpbuff[found].datalen - 2) {
-		 	d->dns.dns = tcpbuff[found].buff + 2;
-		 	d->dns.endp = tcpbuff[found].buff + tcpbuff[found].datalen;
-			if (d->debug & FLAG_MODE_PARSE_ANSWER) {
-				parse_DNS_answer(d);
+			parse_DNS(d);
+		 	tcpbuff[found].used = 0;
+		} else
+		if (tcpbuff[found].datalen > 512) {
+			d->dns._transport_type = T_TCP_PARTIAL;
+			if (d->debug & FLAG_DEBUG_TCP) {
+				printf("#INFO_TCP:T_TCP_PARTIAL\n");
 			}
-			if (d->debug & FLAG_MODE_PARSE_QUERY) {
-				parse_DNS_query(d);
-			}
+			parse_DNS(d);
 		 	tcpbuff[found].used = 0;
 		}
 		return;
 	}
-	if (free < 0) {
-		if (tcpbuff_used < tcpbuff_max)
-			free = tcpbuff_used;
-		else
-			free = random() % tcpbuff_max;
-	}
-	if ((d->dns.dns[0] * 256 + d->dns.dns[1] == datalen - 2) || (datalen > 500 && (d->dns.dns[0] * 256 + d->dns.dns[1]) >= datalen - 2)) {
-		datalen -= 2;
-		d->dns.dns += 2;
-		d->dns.dnslen = datalen;
-		d->ParsePcapCounter._tcp_query++;
-		if (d->debug & FLAG_MODE_PARSE_ANSWER) {
-			parse_DNS_answer(d);
-		}
-		if (d->debug & FLAG_MODE_PARSE_QUERY) {
-			parse_DNS_query(d);
-		}
-		return;
-	}
-	if (d->dns.len - datalen > TCPBUF_HEADERLEN || datalen > TCPBUF_BUFFLEN) {
-		if (d->debug & FLAG_DEBUG_TCP) {
-		 	printf("#ERROR:Too large data length at tcpbuf: %d, %d", d->dns.len - datalen, datalen);
-			hexdump("input", d->dns._ip, d->dns.len);
-		}
-		return;
-	}
-	if (tcpbuff_used <= free)
-		tcpbuff_used = free + 1;
-
-	if (datalen <= 0) {
-		 	printf("#ERROR:datalen=%d <= 0\n", datalen);
-			hexdump("input", d->dns._ip, d->dns.len);
-			exit(1);
-	}
-	tcpbuff[free].used = 1;
-	tcpbuff[free].timestamp = d->dns.tv_sec;
-	memcpy(tcpbuff[free].header, d->dns._ip, d->dns.len - datalen);
-	memcpy(tcpbuff[free].buff, d->dns.dns, datalen);
-	tcpbuff[free].headerlen = d->dns.len - datalen;
-	tcpbuff[free].datalen = datalen;
-	tcpbuff[free].count = 1;
-	return;
 }
 
 void parse_IPv6Fragment(struct DNSdataControl *d)
@@ -988,7 +1007,7 @@ void parse_IPv6Fragment(struct DNSdataControl *d)
 			d->ParsePcapCounter._udp6_frag_first++;
 			d->dns.protoheader += 8;
 			d->dns.dns = d->dns.protoheader + 8;
-			parse_DNS_query(d);
+			parse_DNS(d);
 		} else {
 			d->ParsePcapCounter._udp6_frag_next++;
 #if 0
@@ -1024,6 +1043,7 @@ void parse_L3(struct DNSdataControl *d)
 	d->dns.version = d->dns._ip[0] / 16;
 	d->dns.pointer = 12;
 	d->dns.endp = d->dns._ip + d->dns.len;
+	d->dns._fragSize = 0;
 
 	if (d->dns.version == 4) {
 		d->ParsePcapCounter._ipv4++;
@@ -1080,6 +1100,7 @@ void parse_L3(struct DNSdataControl *d)
 			if (ip_off == 0x2000) {
 				d->ParsePcapCounter._udp4_frag_first++;
 				d->dns._transport_type = T_UDP_FRAG;
+				d->dns._fragSize = d->dns.iplen;
 				// hexdump("IPv4 UDP Fragment: First", d->dns._ip, d->dns.len);
 				parse_UDP(d);
 				return;
@@ -1097,6 +1118,7 @@ void parse_L3(struct DNSdataControl *d)
 			} else {
 				d->ParsePcapCounter._tcp4_frag++;
 				d->dns._transport_type = T_TCP_FRAG;
+				d->dns._fragSize = d->dns.iplen;
 				hexdump("IPv4 TCP Fragment: First", d->dns._ip, d->dns.len);
 				return;
 			}
@@ -1338,6 +1360,7 @@ int parse_line(struct DNSdataControl* c)
 	c->dns.tv_sec = mktime(&tm)+c->tz_read_offset;
 	c->dns.tv_usec = msec * 1000;
 	p += 4;
+	c->dns._fragSize = 0;
 
 	if (c->debug & FLAG_SCANONLY) {
 		if (c->ParsePcapCounter.first_sec == 0) {
@@ -1728,7 +1751,7 @@ int parse_l2(struct pcap_header *ph, struct DNSdataControl* c)
 	if (c->linktype == DLT_LINUX_SLL) {
 		l2header = 16;
 	} else
-	if (c->linktype == DLT_IP) {
+	if (c->linktype == DLT_IP || c->linktype == DLT_RAW) {
 		l2header = 0;
 	} else {
 		printf("#Error:unknownLinkType:%d", c->linktype);
@@ -1930,21 +1953,21 @@ int parse_pcap(char *file, struct DNSdataControl* c)
 	c->filename = file;
 	len = strlen(file);
 	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
-		snprintf(buff, sizeof buff, "bzip2 -cd < %s", file);
+		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c);
 		close_status = pclose(fp);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
-		snprintf(buff, sizeof buff, "gzip -cd < %s", file);
+		snprintf(buff, sizeof buff, "gzip -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c);
 		close_status = pclose(fp);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
-		snprintf(buff, sizeof buff, "xz -cd < %s", file);
+		snprintf(buff, sizeof buff, "xz -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c);
