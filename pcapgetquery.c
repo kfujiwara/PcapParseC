@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.85 2019/03/12 11:55:11 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.86 2019/04/25 08:26:19 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -117,7 +117,6 @@ int repeat_threshold = -1;
 int repeated_detection_by_ttl = 0;
 int report_repeated_queries = 0;
 int print_queries_bind9 = 0;
-int print_queries_csv_old = 0;
 int print_queries_csv = 0;
 int print_query_counter = 0;
 int print_response_detail = 0;
@@ -475,31 +474,6 @@ int callback(struct DNSdataControl *d, int mode)
 	if (print_filename) {
 		snprintf(p, len, "filename=%s", d->filename);
 	}
-	if (print_queries_csv_old) {
-#define CSV_OLD_STR "timestamp,adr,port,qname,qclass,qtype,id,qr,rd,edns0,error,rcode,ans_ttl,cname_ttl,cname,a_aaaa,dnslen,transport"
- 		printf("%d.%06d,"
-			"%s,%d,"
- 			"%s,%d,%d,"
- 			"%d,%d,%d,"
- 			"%d,%d,%d,"
- 			"%d,%d,%s,",
- 			d->dns.tv_sec, d->dns.tv_usec,
-			flag_clientmode == 0 ? d->dns.s_src : d->dns.s_dst,
- 			flag_clientmode == 0 ? d->dns.p_sport : d->dns.p_dport,
- 			d->dns.qname, d->dns.qclass, d->dns.qtype,
- 			d->dns._id, d->dns._qr, d->dns._rd,
-			d->dns._edns0 ? d->dns.edns0udpsize : 0, d->dns.error, d->dns._rcode,
-			d->dns.answer_ttl, d->dns.cname_ttl, d->dns.cnamelist);
-		for (i = 0; i < d->dns.n_ans_v4; i++) {
-			inet_ntop(AF_INET, d->dns.ans_v4[i], addrstr, sizeof(addrstr));
-			printf("%s/", addrstr);
-		}
-		for (i = 0; i < d->dns.n_ans_v6; i++) {
-			inet_ntop(AF_INET6, d->dns.ans_v6[i], addrstr, sizeof(addrstr));
-			printf("%s/", addrstr);
-		}
-		printf(",%d,%d\n", d->dns.dnslen, d->dns._transport_type);
-	} else
 	if (print_queries_csv) {
 	    if (flag_greater_than < d->dns.dnslen) {
 		inet_ntop(d->dns.af, d->dns.p_src, s_src, sizeof(s_src));
@@ -772,8 +746,7 @@ int main(int argc, char *argv[])
 		nv4mask++;
 		check_v4 = 1;
 		break;
-	case 'C': print_queries_csv_old = 1; break;
-	case 'B': print_queries_csv = 1; break;
+	case 'C': print_queries_csv = 1; break;
 	case 'L':
 		print_queries_bind9++;
 		debug |= FLAG_BIND9LOG;
@@ -831,16 +804,13 @@ int main(int argc, char *argv[])
 	if (check_v4 != 0 || check_v6 != 0 || src4[0] != 255 || src6[0] != 255 || dest4[0] != 255 || dest6[0] != 255) {
 		debug |= FLAG_DO_ADDRESS_CHECK;
 	}
-	if (print_query_counter == 0 && print_queries_csv == 0 && print_queries_csv_old == 0 && print_queries_bind9 == 0) {
+	if (print_query_counter == 0 && print_queries_csv == 0 && print_queries_bind9 == 0) {
 		print_queries_bind9 = 1;
 		debug |= FLAG_BIND9LOG;
 	}
 	if (flag_print_labels) {
 		if (print_queries_csv) {
 			printf(CSV_STR "\n");
-		} else
-		if (print_queries_csv_old) {
-			printf(CSV_OLD_STR "\n");
 		}
 	}
 	if (data_start != 0 && data_time_length != 0)
