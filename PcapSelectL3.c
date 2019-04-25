@@ -1,6 +1,6 @@
 /*
 		nexact++;
-	$Id: PcapSelectL3.c,v 1.14 2019/03/19 08:05:26 fujiwara Exp $
+	$Id: PcapSelectL3.c,v 1.15 2019/04/25 04:56:16 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -94,12 +94,8 @@ void hexdump(char *msg, u_char *data, int len)
 	}
 	printf("\n");
 }
-
-/*****************************************************************************
-	 Warning
-			Little endian only
-			Supported Linktype: 0==PPP	1==Ether
- *****************************************************************************
+/*
+			Supported Linktype: DLT_NULL, DLT_EN10MB, DLT_IP, DLT_LINUX_SLL
  */
 
 struct pcap_file_header {
@@ -124,7 +120,7 @@ struct pcap_header {
 #define DLT_EN10MB	1	/* Ethernet (10Mb) */
 #define	DLT_IP		101	/* IP packet directly */
 #define DLT_LINUX_SLL	113	/* Linux cocked */
-#define DLT_RAW		12	/* _ip IP */
+//#define DLT_RAW		12	/* _ip IP */
 
 static u_short swap16(u_short x)
 {
