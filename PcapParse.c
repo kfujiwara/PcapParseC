@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.125 2019/02/25 06:53:37 fujiwara Exp $
+	$Id: PcapParse.c,v 1.130 2019/12/12 11:17:03 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -303,15 +303,17 @@ int parse_edns(struct DNSdataControl *d)
 	u_short keytag;
 
 	p = d->dns.dns + d->dns.pointer;
-/*
-printf("p=%lx dns=%lx pointer=%d\n[", p, d->dns.dns, d->dns.pointer);
+
+#if DEBUG
+printf("parse_edns: p=%lx dns=%lx pointer=%d\n[", p, d->dns.dns, d->dns.pointer);
 while (p < d->dns.endp) {
 	printf(" %02x", *p++);
 }
 printf("\n");
 	p = d->dns.dns + d->dns.pointer;
 fflush(stdout);
-*/
+#endif
+
 	if (p + 11 > d->dns.endp
 	   || p[0] != 0 || p[1] != 0 || p[2] != 41) {
 		if (d->debug & FLAG_INFO)
@@ -456,7 +458,7 @@ void parse_DNS_query(struct DNSdataControl *d)
 
 	d->dns._flag = d->dns.dns[2] * 256 + d->dns.dns[3];
 	d->dns._opcode = (d->dns.dns[2] & 0x78) >> 3;
-	d->dns._rcode = -1;
+	d->dns._rcode = d->dns.dns[3] & 0x0f;
 	d->dns._rd = (d->dns.dns[2] & 1);
 	d->dns._tc = (d->dns.dns[2] & 2);
 	d->dns._cd = d->dns.dns[3] & 0x10;
@@ -518,7 +520,7 @@ void print_dns_answer(struct DNSdataControl *d)
 		inet_ntop(d->dns.af, d->dns.req_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
 		inet_ntop(d->dns.af, d->dns.req_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
 	}
-	printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%04x %d/%d/%d\n", d->dns.s_src, d->dns.req_sport, d->dns.s_dst, d->dns.req_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11]);
+	printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%04x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", d->dns.s_src, d->dns.req_sport, d->dns.s_dst, d->dns.req_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
 	j = d->dns.dns[7] + d->dns.dns[9] + d->dns.dns[11];
 	k = 0;
 	while (j > 0) {
@@ -529,7 +531,13 @@ void print_dns_answer(struct DNSdataControl *d)
 		rr_ttl = get_uint32(&d->dns);
 		rr_rdlength = get_uint16(&d->dns);
 		if (rr_type == 41) {
-			printf(" RR%d: %s %d %d %d OPT %d\n", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
+			printf(" RR%d: %s %d %d %d OPT %d [", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
+			p = d->dns.dns + d->dns.pointer;
+			rr_rdlength0 = rr_rdlength;
+			while (rr_rdlength0-- > 0) {
+				printf(" %02x", *p++);
+			}
+			printf(" ]\n");
 		} else
 		if (rr_type == 5) {
 		  i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
@@ -616,6 +624,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	d->dns.req_dst = d->dns.p_src;
 	d->dns.cname_ttl = -1;
 	d->dns.answer_ttl = -1;
+	d->dns.additional_dnssec_rr = 0;
 
 	if (d->debug & FLAG_DO_ADDRESS_CHECK)
 		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
@@ -647,12 +656,13 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	k = 0;
 	while (j > 0) {
 		p = d->dns.dns + d->dns.pointer;
-		if (p + 11 > d->dns.endp &&
+		if (p + 11 >= d->dns.endp &&
 		    p[0] == 0 && p[1] == 0 && p[2] == 41) {
 			j--;
 			d->dns.error |= parse_edns(d);
 			if (d->dns.error)
 				break;
+			continue;
 		}
 		i = get_dname(&d->dns, buff, sizeof(buff), 0, d->debug & FLAG_BIND9LOG);
 		if (i < 0) break;
@@ -705,8 +715,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 		if ( (d->dns.qtype != 46 && l == 46)
 		  || (d->dns.qtype != 47 && l == 47)
 		  || (d->dns.qtype != 50 && l == 50) ) {
-			d->dns._do = 1;
-			d->dns._edns0 = 1;
+			d->dns.additional_dnssec_rr++;
 		}
 		if (n < 0) break;
 		d->dns.pointer += n;
@@ -848,7 +857,7 @@ void parse_TCP(struct DNSdataControl *d)
 	data_offset = (d->dns.protoheader[12] >> 4) * 4;
 	d->dns.dns = d->dns.protoheader + data_offset;
 	datalen = d->dns.endp - d->dns.dns;
-	if ((d->dns.protoheader[12] >> 4) != 5 || datalen < 0) {
+	if ((d->dns.protoheader[12] >> 4) < 5 || datalen < 0) {
 		d->dns.error |= ParsePcap_TCPError;
 		return;
 	}
@@ -931,6 +940,7 @@ hexdump("proto", d->dns.protoheader, 4);
 				datalen -= 2;
 				d->dns.dns += 2;
 				d->dns.dnslen = j;
+				d->dns.endp = d->dns.dns + datalen;
 				d->ParsePcapCounter._tcp_query++;
 				if (d->debug & FLAG_DEBUG_TCP) {
 					printf("#INFO_TCP:First:datalen=%d, dnslen=%d\n", datalen, j);
@@ -1119,7 +1129,9 @@ void parse_L3(struct DNSdataControl *d)
 				d->ParsePcapCounter._tcp4_frag++;
 				d->dns._transport_type = T_TCP_FRAG;
 				d->dns._fragSize = d->dns.iplen;
+#if DEBUG
 				hexdump("IPv4 TCP Fragment: First", d->dns._ip, d->dns.len);
+#endif
 				return;
 			}
 		case 1:
@@ -1254,8 +1266,9 @@ struct types { char *name; int code; } types[] = {
 { "*", 255, },
 { "URI", 256, },
 { "CAA", 257, },
-{ "UNASSIGNED", 258, },
+{ "AVC", 258, },
 { "DOA", 259, },
+{ "AMTRELAY", 260, },
 { "TA", 32768, },
 { "DLV", 32769, },
 { "RESERVED0", 0, },
@@ -1304,9 +1317,29 @@ int parse_uint16(u_char *str, int len)
 }
 #endif
 
-#define parse_decimal2(x) ((x[0]<'0'||x[0]>'9'||x[1]<'0'||x[1]>'9')?-1:(x[0]-'0')*10+x[1]-'0')
-#define parse_decimal3(x) ((x[0]<'0'||x[0]>'9'||x[1]<'0'||x[1]>'9'||x[2]<'0'||x[2]>'9')?-1:(x[0]-'0')*100+(x[1]-'0')*10+x[2]-'0')
-#define parse_decimal4(x) ((x[0]<'0'||x[0]>'9'||x[1]<'0'||x[1]>'9'||x[2]<'0'||x[2]>'9'||x[3]<'0'||x[3]>'9')?-1:(x[0]-'0')*1000+(x[1]-'0')*100+(x[2]-'0')*10+x[3]-'0')
+int parse_decimal2(u_char *x)
+{
+	if (x[0]<'0' || x[0]>'9' || x[1]<'0' || x[1]>'9') {
+		return -1;
+	}
+	return (x[0]-'0')*10+x[1]-'0';
+}
+
+int parse_decimal3(u_char *x)
+{
+	if (x[0]<'0' || x[0]>'9' || x[1]<'0' || x[1]>'9' || x[2]<'0' || x[2]>'9') {
+		return -1;
+	}
+	return (x[0]-'0')*100+(x[1]-'0')*10+x[2]-'0';
+}
+
+int parse_decimal4(u_char *x)
+{
+	if (x[0]<'0' || x[0]>'9' || x[1]<'0' || x[1]>'9' || x[2]<'0' || x[2]>'9' || x[3]<'0' || x[3]>'9') {
+		return -1;
+	}
+	return (x[0]-'0')*1000+(x[1]-'0')*100+(x[2]-'0')*10+x[3]-'0';
+}
 
 int parse_line(struct DNSdataControl* c)
 {
@@ -1798,6 +1831,7 @@ int _parse_pcap(FILE *fp, struct DNSdataControl* c)
 	long long offset2;
 	unsigned long long t64;
 
+	c->ParsePcapCounter._numfiles++;
 	len = fread(&pf, 1, PCAP_FIRST_READ, fp);
 	offset = len;
 
@@ -2042,6 +2076,7 @@ void Print_PcapStatistics(struct DNSdataControl *c)
 	NonzeroPrint("#PcapStatistics._parsed_dnsquery", c->ParsePcapCounter._parsed_dnsquery);
 	NonzeroPrint("#PcapStatistics._IPlenMissmatch", c->ParsePcapCounter._IPlenMissmatch);
 	NonzeroPrint("#PcapStatistics._unknown_ipaddress", c->ParsePcapCounter._unknown_ipaddress);
+	NonzeroPrint("#PcapStatistics._numfiles", c->ParsePcapCounter._numfiles);
 	NonzeroPrint("#PcapStatistics.error00", c->ParsePcapCounter.error[0]);
 	NonzeroPrint("#PcapStatistics.error01", c->ParsePcapCounter.error[1]);
 	NonzeroPrint("#PcapStatistics.error02", c->ParsePcapCounter.error[2]);

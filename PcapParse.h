@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.57 2019/02/20 11:56:25 fujiwara Exp $
+	$Id: PcapParse.h,v 1.59 2019/12/12 11:17:03 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -113,6 +113,7 @@ struct DNSdata
   u_char _qr;
   int _opcode;
   int _rcode;
+  int additional_dnssec_rr;
   u_char _udpsumoff;
 	/* Valid if debug & FLAG_MODE_PARSE_ANSWER */
   int cname_ttl;
@@ -163,6 +164,7 @@ struct PcapStatistics
 	int _unknown_ipaddress;
 	int _edns_error;
 	int _rd;
+	int _numfiles;
 	int error[10];
 };
 

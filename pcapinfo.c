@@ -1,5 +1,5 @@
 /*
-	$Id: pcapinfo.c,v 1.6 2017/05/25 08:30:14 fujiwara Exp $
+	$Id: pcapinfo.c,v 1.7 2019/12/12 11:17:03 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -284,21 +284,21 @@ void parse_file(char *file, pcap_result *result)
 	}
 	len = strlen(file);
 	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
-		snprintf(buff, sizeof buff, "bzip2 -cd < %s", file);
+		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return;
 		_parse_file(fp, result);
 		close_status = pclose(fp);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
-		snprintf(buff, sizeof buff, "gzip -cd < %s", file);
+		snprintf(buff, sizeof buff, "gzip -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return;
 		_parse_file(fp, result);
 		close_status = pclose(fp);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
-		snprintf(buff, sizeof buff, "xz -cd < %s", file);
+		snprintf(buff, sizeof buff, "xz -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return;
 		_parse_file(fp, result);
