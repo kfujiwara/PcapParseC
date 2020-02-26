@@ -22,14 +22,13 @@ APR_ADDTO(LDFLAGS, `$apr_config --ldflags`)
 APR_ADDTO(LIBS, `$apr_config --libs --link-ld`)
 AM_CONDITIONAL(APRexist, test x$APRCC != x)
 # Checks for header files.
-AC_CHECK_HEADERS([arpa/inet.h time.h fcntl.h netinet/in.h stdlib.h sys/socket.h unistd.h string.h stdarg.h errno.h ctype.h apr.h math.h string.h err.h sys/endian.h math.h maxminddb.h apr_hash.h sys/stat.h])
+AC_CHECK_HEADERS([arpa/inet.h time.h fcntl.h netinet/in.h stdlib.h sys/socket.h unistd.h string.h stdarg.h errno.h ctype.h apr.h math.h string.h err.h sys/endian.h math.h apr_hash.h sys/stat.h])
 
 AC_CHECK_PROG(fetch, wget)
 
 # Checks for typedefs, structures, and compiler characteristics.
 #AC_TYPE_INT32_T
 
-AC_CHECK_LIB(maxminddb,MMDB_open)
 # Checks for library functions.
 #AC_FUNC_MALLOC
 AC_CHECK_FUNCS([memset strdup inet_pton err sqrt])

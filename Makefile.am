@@ -1,5 +1,5 @@
 ACLOCAL_AMFLAGS = -I m4
-LDADD=-lm -L$(HOME)/.local/lib/ -lmaxminddb
+LDADD=-lm
 CFLAGS+=
 EXTRA_DIST = JPRS-OSCL.txt tools/Log2pcap GenerateTLDlist TLDLIST
 CLEANFILES = tldlist.c
