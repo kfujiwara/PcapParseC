@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.130 2019/12/12 11:17:03 fujiwara Exp $
+	$Id: PcapParse.c,v 1.132 2020/03/17 03:55:10 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -456,13 +456,6 @@ void parse_DNS_query(struct DNSdataControl *d)
 #endif
 	d->ParsePcapCounter._before_checking_dnsheader++;
 
-	d->dns._flag = d->dns.dns[2] * 256 + d->dns.dns[3];
-	d->dns._opcode = (d->dns.dns[2] & 0x78) >> 3;
-	d->dns._rcode = d->dns.dns[3] & 0x0f;
-	d->dns._rd = (d->dns.dns[2] & 1);
-	d->dns._tc = (d->dns.dns[2] & 2);
-	d->dns._cd = d->dns.dns[3] & 0x10;
-	d->dns._id = (d->dns.dns[0] << 8) | d->dns.dns[1];
 	do {
 		if (d->dns._opcode != 0 && d->dns._opcode != 5) {
 			if (d->debug & FLAG_INFO) {
@@ -505,11 +498,18 @@ void print_dns_answer(struct DNSdataControl *d)
 	u_char *p, *q;
 	u_short *r;
 	u_char rr_name[257], rr_rdata_name[257];
-	int i, j, k, eflag, anssec;
+	int i, j, k, eflag;
 	int rr_type, rr_class, rr_ttl, rr_rdlength;
+	int anssec, authsec, additional;
 	int rr_rdlength0;
 	u_char *rr_rdata;
 	int update_flag = 0;
+	int print_refns = (d->debug & FLAG_PRINTANS_REFNS) || (d->debug & FLAG_PRINTANS_ALL);
+	int print_refglue = (d->debug & FLAG_PRINTANS_REFGLUE) || (d->debug & FLAG_PRINTANS_ALL);
+	int print_answer = (d->debug & FLAG_PRINTANS_ANSWER) || (d->debug & FLAG_PRINTANS_ALL);
+	int print_soa = (d->debug & FLAG_PRINTANS_AUTHSOA) || (d->debug & FLAG_PRINTANS_ALL);
+	int print_info = (d->debug & FLAG_PRINTANS_INFO) || (d->debug & FLAG_PRINTANS_ALL);
+	int print_all = (d->debug & FLAG_PRINTANS_ALL);
 
 	if (d->dns._qr == 0 && d->dns._opcode == 5) { update_flag = 1; }
 	d->dns.pointer = 12;
@@ -520,10 +520,14 @@ void print_dns_answer(struct DNSdataControl *d)
 		inet_ntop(d->dns.af, d->dns.req_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
 		inet_ntop(d->dns.af, d->dns.req_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
 	}
-	printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%04x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", d->dns.s_src, d->dns.req_sport, d->dns.s_dst, d->dns.req_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
-	j = d->dns.dns[7] + d->dns.dns[9] + d->dns.dns[11];
+	if (print_info) {
+		printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%02x:%02x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", d->dns.s_src, d->dns.req_sport, d->dns.s_dst, d->dns.req_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag1, d->dns._flag2, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
+	}
+	anssec = d->dns.dns[7];
+	authsec = d->dns.dns[9];
+	additional = d->dns.dns[11];
 	k = 0;
-	while (j > 0) {
+	while (anssec + authsec + additional > 0) {
 	  i = get_dname(&d->dns, rr_name, sizeof(rr_name), 0, 0);
 		if (i < 0) break;
 		rr_type = get_uint16(&d->dns);
@@ -531,50 +535,92 @@ void print_dns_answer(struct DNSdataControl *d)
 		rr_ttl = get_uint32(&d->dns);
 		rr_rdlength = get_uint16(&d->dns);
 		if (rr_type == 41) {
-			printf(" RR%d: %s %d %d %d OPT %d [", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
-			p = d->dns.dns + d->dns.pointer;
-			rr_rdlength0 = rr_rdlength;
-			while (rr_rdlength0-- > 0) {
-				printf(" %02x", *p++);
+			if (print_info && anssec == 0 && authsec == 0) {
+				printf("Additional: %s %d %d %d OPT %d [", rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
+				p = d->dns.dns + d->dns.pointer;
+				rr_rdlength0 = rr_rdlength;
+				while (rr_rdlength0-- > 0) {
+					printf(" %02x", *p++);
+				}
+				printf(" ]\n");
 			}
-			printf(" ]\n");
 		} else
 		if (rr_type == 5) {
-		  i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
+			i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
 			if (i < 0) break;
-			printf(" RR%d: %s %d %d %d CNAME %s\n", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			if (print_answer && anssec > 0) {
+				printf("ANSSEC: %s %d %d %d CNAME %s\n", rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			}
 		} else
 		if (rr_type == 2) {
-		  i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
+		  	i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
 			if (i < 0) break;
-			printf(" RR%d: %s %d %d %d NS %s\n", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			if (print_refns && anssec == 0 && authsec > 0) {
+				printf("REFNS: %s %d %d %d NS %s\n", rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			} else
+			if (print_answer && anssec > 0) {
+				printf("ANSSEC: %s %d %d %d NS %s\n", rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			}
 		} else
 		if (rr_type == 12) {
-		  i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
+			i = get_dname(&d->dns, rr_rdata_name, sizeof(rr_rdata_name), GET_DNAME_NO_SAVE, d->debug & FLAG_BIND9LOG);
 			if (i < 0) break;
-			printf(" RR%d:  %s %d %d %d PTR %s\n", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			if (print_answer && anssec > 0) {
+				printf("ANSSEC: %s %d %d %d PTR %s\n", rr_name, rr_type, rr_class, rr_ttl, rr_rdata_name);
+			}
 		} else
 		if (rr_type == 1 && rr_rdlength == 4) {
 			q = d->dns.dns + d->dns.pointer;
-			printf(" RR%d: %s %d %d %d A %d.%d.%d.%d\n", j, rr_name, rr_type , rr_class, rr_ttl, q[0], q[1], q[2], q[3]);
+			if (print_refglue && anssec == 0 && authsec == 0) {
+				printf("Glue: %s %d %d %d A %d.%d.%d.%d\n", rr_name, rr_type , rr_class, rr_ttl, q[0], q[1], q[2], q[3]);
+			} else
+			if (print_answer && anssec > 0) {
+				printf("ANSSEC: %s %d %d %d A %d.%d.%d.%d\n", rr_name, rr_type , rr_class, rr_ttl, q[0], q[1], q[2], q[3]);
+			} else
+			if ((anssec == 0 && authsec == 0) && print_all) {
+				printf("ADDITIONAL: %s %d %d %d A %d.%d.%d.%d\n", rr_name, rr_type , rr_class, rr_ttl, q[0], q[1], q[2], q[3]);
+			}
 		} else
 		if (rr_type == 24 && rr_rdlength == 16) {
 			r = (u_short *)d->dns.dns + d->dns.pointer;
-			printf(" RR%d %s %d %d %d AAAA %x:%x:%x:%x:%x:%x:%x:%x\n", j, rr_name, rr_type, rr_class, rr_ttl, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+			if (print_refglue && anssec == 0 && authsec == 0) {
+				printf("Glue: %s %d %d %d AAAA %x:%x:%x:%x:%x:%x:%x:%x\n", rr_name, rr_type, rr_class, rr_ttl, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+			} else
+			if (print_answer && anssec > 0) {
+				printf("ANSSEC: %s %d %d %d AAAA %x:%x:%x:%x:%x:%x:%x:%x\n", rr_name, rr_type, rr_class, rr_ttl, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+			} else
+			if ((anssec == 0 && authsec == 0) && print_all) {
+				printf("ADDITIONAL: %s %d %d %d AAAA %x:%x:%x:%x:%x:%x:%x:%x\n", rr_name, rr_type, rr_class, rr_ttl, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+			}
 		} else
 		if (rr_type == 6) {
-			printf(" RR%d: %s %d %d %d SOA %d\n", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
-		} else {
-			printf(" RR%d: %s %d %d %d rdlen=%d", j, rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
-			p = d->dns.dns + d->dns.pointer;
-			rr_rdlength0 = rr_rdlength;
-			while (rr_rdlength0-- > 0) {
-				printf(" %02x", *p++);
+			if (print_soa && anssec == 0 && authsec > 0) {
+				printf("AuthSOA: %s %d %d %d SOA %d\n", rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
+			} else
+			if (print_answer && anssec > 0) {
+				printf("ANSSEC: %s %d %d %d SOA %d\n", rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
 			}
-			printf("\n");
+		} else {
+			if (print_answer && anssec > 0) {
+				printf("ANSWER: %s %d %d %d rdlen=%d", rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
+				p = d->dns.dns + d->dns.pointer;
+				rr_rdlength0 = rr_rdlength;
+				while (rr_rdlength0-- > 0) {
+					printf(" %02x", *p++);
+				}
+				printf("\n");
+			}
 		}
 		d->dns.pointer += rr_rdlength;
-		j--;
+		if (anssec > 0) {
+			anssec--;
+		} else if (authsec > 0) {
+			authsec--;
+		} else if (additional > 0) {
+			additional--;
+		} else {
+			anssec = 0; authsec = 0; additional = 0;
+		}
 	}
 }
 
@@ -626,6 +672,15 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	d->dns.answer_ttl = -1;
 	d->dns.additional_dnssec_rr = 0;
 
+	d->dns._auth_ns = 0;
+	d->dns._auth_soa = 0;
+	d->dns._auth_ds = 0;
+	d->dns._auth_rrsig = 0;
+	d->dns._auth_other = 0;
+	d->dns._glue_a = 0;
+	d->dns._glue_aaaa = 0;
+	d->dns._answertype = _ANSWER_UNKNOWN;
+
 	if (d->debug & FLAG_DO_ADDRESS_CHECK)
 		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
 			d->ParsePcapCounter._unknown_ipaddress++;
@@ -649,10 +704,10 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	if (c <= 0 || d->dns.qtype < 0 || d->dns.qclass < 0) return;
 	if (d->dns.qtype != 252 && (d->dns._rcode == 1 || d->dns._rcode == 5 || d->dns._rcode == 9)) return; /* FORMERR | REFUSED | NOTAUTH */
 	d->dns._edns0 = (d->dns.endp - d->dns.dns > 512 && d->dns._ip[9] == 17) ? 1 : 0;
-	j = d->dns.dns[7] + d->dns.dns[9] + d->dns.dns[11];
 	anssec = d->dns.dns[7];
 	authsec = d->dns.dns[9];
 	additional = d->dns.dns[11];
+	j = anssec + authsec + additional;
 	k = 0;
 	while (j > 0) {
 		p = d->dns.dns + d->dns.pointer;
@@ -705,11 +760,35 @@ void parse_DNS_answer(struct DNSdataControl *d)
 					printf(" RR: %d  %s %d IN CNAME %s\n", j, buff, ttl, buff2);
 #endif
 				}
-			} else {
-				if (anssec <= 0 && m == 1 && l == 6) {
+				anssec--; j--;
+			} else
+			if (authsec > 0) {
+				if (m == 1 && l == 6) {
 					strcpy((char *)soa_dom, (char *)buff);
 					soa_ttl = ttl;
+					d->dns._auth_soa++;
+				} else
+				if (m == 1 && l == 2) {
+					d->dns._auth_ns++;
+				} else
+				if (m == 1 && l == 43) {
+					d->dns._auth_ds++;
+				} else
+				if (m == 1 && l == 46) {
+					d->dns._auth_rrsig++;
+				} else {
+					d->dns._auth_other++;
 				}
+				authsec--; j--;
+			} else
+			if (additional > 0) {
+				if (m == 1 && l == 1) {
+					d->dns._glue_a++;
+				} else
+				if (m == 1 && l == 24) {
+					d->dns._glue_aaaa++;
+				}
+				additional--; j--;
 			}
 		}
 		if ( (d->dns.qtype != 46 && l == 46)
@@ -719,13 +798,6 @@ void parse_DNS_answer(struct DNSdataControl *d)
 		}
 		if (n < 0) break;
 		d->dns.pointer += n;
-		j--;
-		if (anssec > 0)
-			anssec--;
-		else if (authsec > 0)
-			authsec--;
-		else
-			additional--;
 	}
 	if (j != 0) {
 		d->dns.error |= ParsePcap_AnswerAnalysisError;
@@ -792,12 +864,41 @@ void parse_DNS_answer(struct DNSdataControl *d)
 		d->dns.n_ans_v4 = 0;
 		d->dns.n_ans_v6 = 0;
 	}
+	if (d->dns._ra != 0) {
+		d->dns._answertype = _ANSWER_RECURSION;
+	} else
+	if (d->dns._rcode == 3) {
+		d->dns._answertype = _ANSWER_NXDOMAIN;
+	} else
+	if (d->dns._ancount == 0 && d->dns._nscount > 0) {
+		d->dns._answertype = _ANSWER_REF;
+	} else
+	if (d->dns._ancount > 0) {
+		d->dns._answertype = _ANSWER_ANSWER;
+	} else {
+		d->dns._answertype = _ANSWER_UNKNOWN;
+	}
 	(void)(d->callback)(d, CALLBACK_PARSED);
 }
 
 void parse_DNS(struct DNSdataControl *d)
 {
 	d->dns._qr = (d->dns.dns[2] & 0x80) != 0;
+	d->dns._flag1 = d->dns.dns[2];
+	d->dns._flag2 = d->dns.dns[3];
+	d->dns._opcode = (d->dns.dns[2] & 0x78) >> 3;
+	d->dns._rcode = d->dns.dns[3] & 0x0f;
+	d->dns._aa = (d->dns.dns[2] & 4);
+	d->dns._tc = (d->dns.dns[2] & 2);
+	d->dns._rd = (d->dns.dns[2] & 1);
+	d->dns._ra = (d->dns.dns[3] & 0x80);
+	d->dns._ad = d->dns.dns[3] & 0x20;
+	d->dns._cd = d->dns.dns[3] & 0x10;
+	d->dns._id = (d->dns.dns[0] << 8) | d->dns.dns[1];
+	d->dns._qdcount = (d->dns.dns[4] << 8) | d->dns.dns[5];
+	d->dns._ancount = (d->dns.dns[6] << 8) | d->dns.dns[7];
+	d->dns._nscount = (d->dns.dns[8] << 8) | d->dns.dns[9];
+	d->dns._arcount = (d->dns.dns[10] << 8) | d->dns.dns[11];
 	if (d->dns._qr != 0 && (d->debug & FLAG_MODE_PARSE_ANSWER) != 0) {
 		parse_DNS_answer(d);
 	}

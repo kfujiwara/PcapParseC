@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.59 2019/12/12 11:17:03 fujiwara Exp $
+	$Id: PcapParse.h,v 1.62 2020/05/17 12:51:18 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -106,25 +106,47 @@ struct DNSdata
   u_char _ecs_mask;
   u_char _ecs_addr[32];
   int _id;
+  u_char _aa;
   u_char _cd;
+  u_char _ad;
   u_char _rd;
+  u_char _ra;
   u_char _tc;
-  int _flag;
+  u_char _flag1;
+  u_char _flag2;
   u_char _qr;
+  int _qdcount;
+  int _ancount;
+  int _nscount;
+  int _arcount;
   int _opcode;
   int _rcode;
   int additional_dnssec_rr;
+  int _auth_ns;
+  int _auth_soa;
+  int _auth_ds;
+  int _auth_rrsig;
+  int _auth_other;
+  int _glue_a;
+  int _glue_aaaa;
+  int _answertype;
   u_char _udpsumoff;
 	/* Valid if debug & FLAG_MODE_PARSE_ANSWER */
   int cname_ttl;
   int answer_ttl;  /* Valid if debug & FLAG_MODE_PARSE_ANSWER
-                      -1 ... _rcode == 1 or _rcode == 2 or ancount == 0 or another error */
+      -1 ... _rcode == 1 or _rcode == 2 or ancount == 0 or another error */
   u_char ans_v4[16][4];
   int n_ans_v4;
   u_char ans_v6[16][32];
   int n_ans_v6;
   u_char cnamelist[4096];
 };
+
+#define _ANSWER_REF 1			/* AUTH REF */
+#define _ANSWER_NXDOMAIN 2		/* AUTH NXD */
+#define _ANSWER_ANSWER 3		/* AUTH ANS */
+#define _ANSWER_RECURSION 0
+#define _ANSWER_UNKNOWN -1
 
 struct PcapStatistics 
 {
@@ -201,18 +223,24 @@ void Print_PcapStatistics(struct DNSdataControl *d);
 #define FLAG_INFO 2
 #define FLAG_DEBUG_TCP 4
 #define	FLAG_DEBUG_UNKNOWNPROTOCOL	8
-#define	FLAG_IGNOREERROR	16
-#define	FLAG_BIND9LOG	32
-#define FLAG_MODE_PARSE_QUERY	64
-#define FLAG_MODE_PARSE_ANSWER	128
-#define	FLAG_ANSWER_TTL_CNAME_PARSE	256
-#define	FLAG_DO_ADDRESS_CHECK		512
-#define	FLAG_DEBUG_1024			1024
-#define	FLAG_DEBUG_2048			2048
-#define	FLAG_DEBUG_4096			4096
-#define	FLAG_DEBUG_8192			8192
-#define	FLAG_NO_INETNTOP		16384
-#define	FLAG_SCANONLY			32768
+#define	FLAG_IGNOREERROR	0x10
+#define	FLAG_BIND9LOG	0x20
+#define FLAG_MODE_PARSE_QUERY	0x40
+#define FLAG_MODE_PARSE_ANSWER	0x80
+#define	FLAG_ANSWER_TTL_CNAME_PARSE	0x100
+#define	FLAG_DO_ADDRESS_CHECK		0x200
+#define	FLAG_DEBUG_1024			0x400
+#define	FLAG_DEBUG_2048			0x800
+#define	FLAG_DEBUG_4096			0x1000
+#define	FLAG_DEBUG_8192			0x2000
+#define	FLAG_NO_INETNTOP		0x4000
+#define	FLAG_SCANONLY			0x8000
+#define	FLAG_PRINTANS_ALL		0x10000
+#define	FLAG_PRINTANS_REFNS		0x20000
+#define	FLAG_PRINTANS_REFGLUE		0x40000
+#define	FLAG_PRINTANS_AUTHSOA		0x80000
+#define	FLAG_PRINTANS_INFO		0x100000
+#define	FLAG_PRINTANS_ANSWER		0x200000
 
 #define	CALLBACK_PARSED		1
 #define	CALLBACK_ADDRESSCHECK	2
@@ -227,6 +255,8 @@ enum {
 	ParsePcap_ERROR_COMMAND = -6,
 	ParsePcap_ERROR_OutofPeriod = -7,
 	ParsePcap_ERROR_EmptyMerge = -8,
+	ParsePcap_ERROR_Memory = -9,
+	ParsePcap_EOF = -10,
 
 	ParsePcap_IPv4ChecksumError = 1,
 	ParsePcap_UDPchecksumError = 2,
