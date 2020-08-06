@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.132 2020/03/17 03:55:10 fujiwara Exp $
+	$Id: PcapParse.c,v 1.134 2020/08/06 07:28:32 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -504,12 +504,12 @@ void print_dns_answer(struct DNSdataControl *d)
 	int rr_rdlength0;
 	u_char *rr_rdata;
 	int update_flag = 0;
-	int print_refns = (d->debug & FLAG_PRINTANS_REFNS) || (d->debug & FLAG_PRINTANS_ALL);
-	int print_refglue = (d->debug & FLAG_PRINTANS_REFGLUE) || (d->debug & FLAG_PRINTANS_ALL);
-	int print_answer = (d->debug & FLAG_PRINTANS_ANSWER) || (d->debug & FLAG_PRINTANS_ALL);
-	int print_soa = (d->debug & FLAG_PRINTANS_AUTHSOA) || (d->debug & FLAG_PRINTANS_ALL);
-	int print_info = (d->debug & FLAG_PRINTANS_INFO) || (d->debug & FLAG_PRINTANS_ALL);
-	int print_all = (d->debug & FLAG_PRINTANS_ALL);
+	int print_refns = (d->debug & FLAG_PRINTANS_REFNS) || (d->debug & FLAG_PRINTANS_ALLRR);
+	int print_refglue = (d->debug & FLAG_PRINTANS_REFGLUE) || (d->debug & FLAG_PRINTANS_ALLRR);
+	int print_answer = (d->debug & FLAG_PRINTANS_ANSWER) || (d->debug & FLAG_PRINTANS_ALLRR);
+	int print_soa = (d->debug & FLAG_PRINTANS_AUTHSOA) || (d->debug & FLAG_PRINTANS_ALLRR);
+	int print_info = (d->debug & FLAG_PRINTANS_INFO) || (d->debug & FLAG_PRINTANS_ALLRR);
+	int print_allrr = (d->debug & FLAG_PRINTANS_ALLRR);
 
 	if (d->dns._qr == 0 && d->dns._opcode == 5) { update_flag = 1; }
 	d->dns.pointer = 12;
@@ -577,7 +577,7 @@ void print_dns_answer(struct DNSdataControl *d)
 			if (print_answer && anssec > 0) {
 				printf("ANSSEC: %s %d %d %d A %d.%d.%d.%d\n", rr_name, rr_type , rr_class, rr_ttl, q[0], q[1], q[2], q[3]);
 			} else
-			if ((anssec == 0 && authsec == 0) && print_all) {
+			if ((anssec == 0 && authsec == 0) && print_allrr) {
 				printf("ADDITIONAL: %s %d %d %d A %d.%d.%d.%d\n", rr_name, rr_type , rr_class, rr_ttl, q[0], q[1], q[2], q[3]);
 			}
 		} else
@@ -589,7 +589,7 @@ void print_dns_answer(struct DNSdataControl *d)
 			if (print_answer && anssec > 0) {
 				printf("ANSSEC: %s %d %d %d AAAA %x:%x:%x:%x:%x:%x:%x:%x\n", rr_name, rr_type, rr_class, rr_ttl, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
 			} else
-			if ((anssec == 0 && authsec == 0) && print_all) {
+			if ((anssec == 0 && authsec == 0) && print_allrr) {
 				printf("ADDITIONAL: %s %d %d %d AAAA %x:%x:%x:%x:%x:%x:%x:%x\n", rr_name, rr_type, rr_class, rr_ttl, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
 			}
 		} else
@@ -899,6 +899,8 @@ void parse_DNS(struct DNSdataControl *d)
 	d->dns._ancount = (d->dns.dns[6] << 8) | d->dns.dns[7];
 	d->dns._nscount = (d->dns.dns[8] << 8) | d->dns.dns[9];
 	d->dns._arcount = (d->dns.dns[10] << 8) | d->dns.dns[11];
+	memcpy(d->dns.portaddr_src+2, d->dns.p_src, d->dns.alen);
+	memcpy(d->dns.portaddr_dst+2, d->dns.p_dst, d->dns.alen);
 	if (d->dns._qr != 0 && (d->debug & FLAG_MODE_PARSE_ANSWER) != 0) {
 		parse_DNS_answer(d);
 	}
@@ -914,6 +916,10 @@ void parse_UDP(struct DNSdataControl *d)
 
 	d->dns.p_sport = d->dns.protoheader[0] * 256 + d->dns.protoheader[1];
 	d->dns.p_dport = d->dns.protoheader[2] * 256 + d->dns.protoheader[3];
+	d->dns.portaddr_src[0] = d->dns.protoheader[0];
+	d->dns.portaddr_src[1] = d->dns.protoheader[1];
+	d->dns.portaddr_dst[0] = d->dns.protoheader[2];
+	d->dns.portaddr_dst[1] = d->dns.protoheader[3];
 	d->dns._udpsumoff = (*(u_short *)(d->dns.protoheader+6) == 0) ? 1 : 0;
 	if (*(u_short *)(d->dns.protoheader+6) != 0 && d->dns._transport_type != T_UDP_FRAG) {
 		if ((d->dns.iplen & 1) != 0 && (d->dns.iplen < 1600)) {
@@ -955,6 +961,10 @@ void parse_TCP(struct DNSdataControl *d)
 
 	d->dns.p_sport = d->dns.protoheader[0] * 256 + d->dns.protoheader[1];
 	d->dns.p_dport = d->dns.protoheader[2] * 256 + d->dns.protoheader[3];
+	d->dns.portaddr_src[0] = d->dns.protoheader[0];
+	d->dns.portaddr_src[1] = d->dns.protoheader[1];
+	d->dns.portaddr_dst[0] = d->dns.protoheader[2];
+	d->dns.portaddr_dst[1] = d->dns.protoheader[3];
 	data_offset = (d->dns.protoheader[12] >> 4) * 4;
 	d->dns.dns = d->dns.protoheader + data_offset;
 	datalen = d->dns.endp - d->dns.dns;

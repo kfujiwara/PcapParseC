@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.62 2020/05/17 12:51:18 fujiwara Exp $
+	$Id: PcapParse.h,v 1.64 2020/08/06 07:28:32 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -46,6 +46,8 @@ struct DNSdata
   u_char *p_dst;
   u_short p_sport;
   u_short p_dport;
+  u_char portaddr_src[18];
+  u_char portaddr_dst[18];
   u_char *req_src;
   u_char *req_dst;
   u_short req_sport;
@@ -235,12 +237,15 @@ void Print_PcapStatistics(struct DNSdataControl *d);
 #define	FLAG_DEBUG_8192			0x2000
 #define	FLAG_NO_INETNTOP		0x4000
 #define	FLAG_SCANONLY			0x8000
-#define	FLAG_PRINTANS_ALL		0x10000
+#define	FLAG_PRINTANS_ALLRR		0x10000
 #define	FLAG_PRINTANS_REFNS		0x20000
 #define	FLAG_PRINTANS_REFGLUE		0x40000
 #define	FLAG_PRINTANS_AUTHSOA		0x80000
 #define	FLAG_PRINTANS_INFO		0x100000
 #define	FLAG_PRINTANS_ANSWER		0x200000
+#define	FLAG_PRINTEDNSSIZE		0x400000
+#define	FLAG_PRINTFLAG			0x800000
+#define	FLAG_PRINTDNSLEN		0x1000000
 
 #define	CALLBACK_PARSED		1
 #define	CALLBACK_ADDRESSCHECK	2

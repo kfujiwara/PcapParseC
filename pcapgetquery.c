@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.98 2020/04/30 09:09:46 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.102 2020/08/06 09:32:51 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -82,13 +82,6 @@ struct counter {
 	u_long counter;
 };
 
-u_int32_t server_ipv4 = 0;
-u_char server_ipv6[16] = { 255 };
-u_char src4[4] = { 255 };
-u_char src6[16] = { 255 };
-u_char dest4[4] = { 255 };
-u_char dest6[16] = { 255 };
-
 struct filter_addr_mask4 {
 	u_int32_t addr;
 	u_int32_t mask;
@@ -98,22 +91,23 @@ struct filter_addr_mask4 {
 struct ipaddr_list {
 	int count;
 	u_int alen;
-	u_char addr[16];
+	u_char addr[18];
+};
+struct qname_list {
+	int count;
+	u_char qname[256];
 };
 
 static apr_pool_t *apr_pool = NULL;
 static apr_hash_t *ipaddr_hash = NULL;
+static apr_hash_t *ipaddr2_hash = NULL;
+static apr_hash_t *qname_hash = NULL;
 #endif
 
-int check_v4 = 0;
-int check_v6 = 0;
 static int select_rd = -1;
 
 int nv4mask = 0;
 struct filter_addr_mask4 v4mask[10];
-
-int nexclude4 = 0;
-u_int32_t exclude4[10];
 
 int repeat_threshold = -1;
 int repeated_detection_by_ttl = 0;
@@ -191,8 +185,11 @@ static struct print_answer_options {
 	{ "AuthSOA", FLAG_PRINTANS_AUTHSOA },
 	{ "ANSWER", FLAG_PRINTANS_ANSWER },
 	{ "INFO", FLAG_PRINTANS_INFO },
-	{ "ALL", FLAG_PRINTANS_ALL },
-	{ NULL, NULL },
+	{ "ALLRR", FLAG_PRINTANS_ALLRR },
+	{ "EDNSSIZE", FLAG_PRINTEDNSSIZE },
+	{ "FLAG", FLAG_PRINTFLAG },
+	{ "DNSLEN", FLAG_PRINTDNSLEN },
+	{ NULL, 0 },
 };
 
 u_int32_t t_start = 0;
@@ -214,6 +211,7 @@ int print_statistics = 0;
 int flag_v = 0;
 int count_printed = 0;
 int count_notprinted = 0;
+int flag_print_ipaddr_hash = 0;
 char * serverlist_file = NULL;
 
 u_char wide_cloud_prefix[] = { 0x20, 0x01, 0x02, 0x00, 0x0d, 0x00, 0x01, 0x00, 0,0,0,0 };
@@ -421,8 +419,11 @@ int callback(struct DNSdataControl *d, int mode)
 	char *p;
 	int len;
 	int _do;
+	char *qr;
 #ifdef HAVE_APR_HASH_H
-	struct ipaddr_list *e, *f;
+	struct ipaddr_list *is1, *id1, *i1;
+	struct ipaddr_list *is2, *id2, *i2;
+	struct qname_list *qh;
 #endif
 	char s_src[256];
 	char s_dst[256];
@@ -430,50 +431,36 @@ int callback(struct DNSdataControl *d, int mode)
 	char additional2[4096] = "";
 
 	if (mode == CALLBACK_ADDRESSCHECK) {
-		/* Dest addr != server_ipc4 */
-	    if (d->dns.version == 4 && src4[0] != 255 && memcmp(src4, &d->dns.p_src, 4) != 0) return 0;
-	    if (d->dns.version == 6 && src6[0] != 255 && memcmp(src4, &d->dns.p_src, 16) != 0) return 0;
-	    if (d->dns.version == 4 && dest4[0] != 255 && memcmp(dest4, &d->dns.p_dst, 4) != 0) return 0;
-	    if (d->dns.version == 6 && dest6[0] != 255 && memcmp(dest4, &d->dns.p_dst, 16) != 0) return 0;
-	    if (flag_clientmode == 0) {
-		if (d->dns.version == 4) {
-			if (check_v4 == 0) return 0;
-			if (server_ipv4 != 0 && server_ipv4 != *(u_int32_t *)(d->dns.req_dst)) return 0;
-			if (d->dns.req_dport != 53) return 0;
-			if (nv4mask != 0) {
-				for (found = 0, c = 0; c < nv4mask; c++) {
-					if (((*(u_int32_t *)d->dns.req_src) & v4mask[c].mask) == v4mask[c].addr) {
-						found = 1;
-						break;
-					}
-				}
-				if (found == 0)
-					return 0;
-			}
-			for (i = 0; i < nexclude4; i++) {
-				if (exclude4[i] == (*(u_int32_t *)d->dns.req_src))
-					return 0;
-			}
-		} else if (d->dns.version == 6) {
-		if (check_v6 == 0) return 0;
-			if (server_ipv6[0] != 255 && memcmp(server_ipv6, d->dns.req_dst, 16) != 0)
-				return 0;
-			if (d->dns.req_dport != 53) return 0;
+#ifdef HAVE_APR_HASH_H
+		if (ipaddr_hash != NULL) {
+			is1 = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, d->dns.p_src, d->dns.alen);
+			if (is1 == NULL) is1 = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, d->dns.portaddr_src, d->dns.alen+2);
+			id1 = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, d->dns.p_dst, d->dns.alen);
+			if (id1 == NULL) id1 = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, d->dns.portaddr_dst, d->dns.alen+2);
+			if (is1 == NULL && id1 == NULL) return 0;
+			i1 = (is1 != NULL) ? is1 : id1;
+		} else {
+			i1 = NULL;
 		}
-		return 1;
-	    } else {
-		if (d->dns.version == 4) {
-			if (check_v4 == 0) return 0;
-			if (server_ipv4 != 0 && server_ipv4 != *(u_int32_t *)(d->dns.req_src)) return 0;
-			if (d->dns.req_dport != 53) return 0;
-		} else if (d->dns.version == 6) {
-			if (check_v6 == 0) return 0;
-			if (server_ipv6[0] != 255 && memcmp(server_ipv6, d->dns.req_src, 16) != 0)
-				return 0;
-			if (d->dns.req_dport != 53) return 0;
+		if (ipaddr2_hash != NULL) {
+			is2 = (struct ipaddr_list *)apr_hash_get(ipaddr2_hash, d->dns.p_src, d->dns.alen);
+			if (is2 == NULL) is2 = (struct ipaddr_list *)apr_hash_get(ipaddr2_hash, d->dns.portaddr_src, d->dns.alen+2);
+			id2 = (struct ipaddr_list *)apr_hash_get(ipaddr2_hash, d->dns.p_dst, d->dns.alen);
+			if (id2 == NULL) id2 = (struct ipaddr_list *)apr_hash_get(ipaddr2_hash, d->dns.portaddr_dst, d->dns.alen+2);
+			if (is2 == NULL && id2 == NULL) return 0;
+			i2 = (is2 != NULL) ? is2 : id2;
+		} else {
+			i2 = NULL;
 		}
+		if (ipaddr_hash != NULL && ipaddr2_hash != 0) {
+			if (!((is1 != NULL && id2 != NULL)
+			 || (id1 != NULL && is2 != NULL)))
+			return 0;
+		}
+		if (i1 != NULL) i1->count++;
+		if (i2 != NULL) i2->count++;
+#endif
 		return 1;
-	    }
 	}
 	if (data_start != 0 && d->dns.tv_sec < data_start) {
 		return 0;
@@ -485,6 +472,13 @@ int callback(struct DNSdataControl *d, int mode)
 	    || (select_rd == 0 && d->dns._rd == 1)) {
 		return 0;
 	}
+#ifdef HAVE_APR_HASH_H
+	if (qname_hash != NULL) {
+		qh = (struct qname_list *)apr_hash_get(qname_hash, d->dns.qname, APR_HASH_KEY_STRING);
+		if (qh == NULL) return 0;
+		qh->count++;
+	}
+#endif
 	if (flag_checksumerror_only) {
 		if ((d->dns.error & (ParsePcap_IPv4ChecksumError
 					| ParsePcap_UDPchecksumError
@@ -494,15 +488,6 @@ int callback(struct DNSdataControl *d, int mode)
 			if (flag_checksumerror_only == 2) return 0;
 		}
 	}
-#ifdef HAVE_APR_HASH_H
-	if (ipaddr_hash != NULL) {
-		e = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, d->dns.req_src, d->dns.alen);
-		f = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, d->dns.req_dst, d->dns.alen);
-		if (e == NULL && f == NULL) return 0;
-		if (e == NULL) e = f;
-		e->count++;
-	}
-#endif
 	if (t_start == 0 || t_start > d->dns.tv_sec) { t_start = d->dns.tv_sec; }
 	if (t_end == 0 || t_end < d->dns.tv_sec) { t_end = d->dns.tv_sec; }
 	if (d->dns._opcode != 0) { return 0; };
@@ -562,6 +547,21 @@ int callback(struct DNSdataControl *d, int mode)
 		p += l;
 		len -= l;
 	}
+	if ((d->debug & FLAG_PRINTEDNSSIZE) != 0 && d->dns._edns0 != 0) {
+		l = snprintf(p, len, " EDNSLEN=%d", d->dns.edns0udpsize);
+		p += l;
+		len -= l;
+	}
+	if ((d->debug & FLAG_PRINTFLAG) != 0) {
+		l = snprintf(p, len, " FLAG=%02x%02x", d->dns._flag1, d->dns._flag2);
+		p += l;
+		len -= l;
+	}
+	if ((d->debug & FLAG_PRINTDNSLEN) != 0) {
+		l = snprintf(p, len, " DNSLEN=%d", d->dns.dnslen);
+		p += l;
+		len -= l;
+	}
 	if (flag_wide_cloud) {
 		if (d->dns.af == AF_INET6 && memcmp(d->dns.req_src, wide_cloud_prefix, 12) == 0) {
 			inet_ntop(AF_INET, d->dns.req_src+12, (char *)d->dns.s_src, sizeof(d->dns.s_src));
@@ -607,14 +607,21 @@ int callback(struct DNSdataControl *d, int mode)
 		}
 	} else
 	if (print_queries_bind9) {
+		if ((d->debug & FLAG_MODE_PARSE_QUERY) != 0
+		 && (d->debug & FLAG_MODE_PARSE_ANSWER) != 0) {
+			qr = (d->dns._qr) ? "R":"Q";
+		} else {
+			qr = "";
+		}
 		ttt = d->dns.tv_sec + tz_offset;
 		t = gmtime(&ttt);
 	 	typestr = type2str(d->dns.qtype);
 	 	classstr = class2str(d->dns.qclass);
-		if (typestr == NULL) sprintf(typestr = typestrbuff, "TYPE%d", d->dns.qtype);
-		if (classstr == NULL) sprintf(classstr = classstrbuff, "CLASS%d", d->dns.qclass);
+		if (typestr == NULL) sprintf(typestr = typestrbuff, "TYPE%u", d->dns.qtype);
+		if (classstr == NULL) sprintf(classstr = classstrbuff, "CLASS%u", d->dns.qclass);
 		if (print_queries_bind9 == 2) {
-			printf("%02d-%s-%04d %02d:%02d:%02d.%06d queries: info: client %s#%d: query: %s %s %s %s%s%s%s%s%s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%06d queries: info: client %s#%d: query: %s %s %s %s%s%s%s%s%s%s%s%s%s\n",
+			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
 	 		d->dns.tv_usec,
@@ -628,7 +635,8 @@ int callback(struct DNSdataControl *d, int mode)
 	 		*d->dns.s_dst==0?"":")",
 			additional, additional2);
 		} else {
-			printf("%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s %s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s %s%s%s%s%s\n",
+			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
 	 		d->dns.tv_usec/1000,
@@ -653,67 +661,189 @@ int callback(struct DNSdataControl *d, int mode)
 	return 0;
 }
 
-void print_ipaddrhash()
+void print_ipaddr_hash(char *label, apr_hash_t *hash)
 {
 	apr_hash_index_t *hash_index = NULL;
 	struct ipaddr_list *e;
 	const void *key;
 	apr_ssize_t klen;
 	void *val = NULL;
+	int port;
+	u_char *portaddr;
 	char s[256];
 
-	hash_index = apr_hash_first(apr_pool, ipaddr_hash);
+	if (hash == NULL) return;
+	hash_index = apr_hash_first(apr_pool, hash);
+	while (hash_index) {
+		apr_hash_this(hash_index, &key, &klen, &val);
+		portaddr = key;
+		e = val;
+		switch (klen) {
+		case 4:
+			inet_ntop(AF_INET, portaddr, s, sizeof(s));
+			port = -1;
+			break;
+		case 6:
+			inet_ntop(AF_INET, portaddr+2, s, sizeof(s));
+			port = portaddr[0]*256 + portaddr[1];
+			break;
+		case 16:
+			inet_ntop(AF_INET6, portaddr, s, sizeof(s));
+			port = -1;
+			break;
+		case 18:
+			inet_ntop(AF_INET, portaddr+2, s, sizeof(s));
+			port = portaddr[0]*256 + portaddr[1];
+			break;
+		default:
+			port = -1;
+			*s = 0;
+		}
+		printf("%s,%s,%d,%d\n", label, s, port, e->count);
+		hash_index = apr_hash_next(hash_index);
+	}
+}
+
+void print_qname_hash()
+{
+	apr_hash_index_t *hash_index = NULL;
+	struct qname_list *e;
+	const void *key;
+	apr_ssize_t klen;
+	void *val = NULL;
+	char s[256];
+
+	if (qname_hash == NULL) return;
+	hash_index = apr_hash_first(apr_pool, qname_hash);
 	while (hash_index) {
 		apr_hash_this(hash_index, &key, &klen, &val);
 		e = val;
 		if (e->count > 0) {
-			inet_ntop(klen==4?AF_INET:AF_INET6, key, s, sizeof(s));
-			printf("I,%s,%d\n", s, e->count);
+			printf("Q,%s,%d\n", s, e->count);
 		}
 		hash_index = apr_hash_next(hash_index);
 	}
 }
 
-void load_ipaddrlist(char *filename)
+// ipaddr/portno
+void register_ipaddr_port_hash(char *str, apr_hash_t **hash)
 {
 #ifdef HAVE_APR_HASH_H
+	int alen = 0;
+	u_char portaddr[18];
+	struct ipaddr_list *e;
+	int port;
+	char *p, *q, *r;
+	int offset = 0;
+
+	if (*hash == NULL)
+		*hash = apr_hash_make(apr_pool);
+	if (*hash == NULL)
+		err(1, "apr_hash_make NULL");
+	p = str;
+	//printf("Input=%s\n", p);
+	while (p != NULL && *p != 0) {
+		q = strchr(p, ',');
+		if (q != NULL && *q == ',') {
+			*q++ = 0;
+		} else {
+			q = NULL;
+		}
+		r = strchr(p, '#');
+		if (r == NULL || *r != '#') {
+			port = -1;
+		} else {
+			port = atoi(r+1);
+			*r = 0;
+			offset = 2;
+			portaddr[0] = ((port & 0xff00) >> 8);
+			portaddr[1] = port & 0xff;
+		}
+		if (strchr(p, ':') != NULL) {
+			if (inet_pton(AF_INET6,p,portaddr+offset)==0)
+				err(1, "cannot parse6 %s", p);
+			alen = 16;
+		} else {
+			if (inet_pton(AF_INET,p,portaddr+offset)==0)
+				err(1, "cannot parse4 %s", p);
+			alen = 4;
+		}
+		if ((e = apr_hash_get(*hash, portaddr, alen+offset)) == NULL) {
+			e = malloc(sizeof(struct ipaddr_list));
+			e->alen = alen+offset;
+			memcpy(e->addr, portaddr, alen+offset);
+			e->count = 0;
+			apr_hash_set(*hash, e->addr, e->alen, e);
+			//printf("Match_IP_address:%s %d\n", p, port);
+		}
+		p = q;
+	}
+#endif
+}
+
+void register_qname_hash(char *qname)
+{
+#ifdef HAVE_APR_HASH_H
+	int qnamelen = 0;
+	u_char qnamebuf[256];
+	struct qname_list *e;
+
+	if (qname_hash == NULL)
+		qname_hash = apr_hash_make(apr_pool);
+	if (qname_hash == NULL)
+		err(1, "apr_hash_make NULL");
+	memset(qnamebuf, 0, sizeof qnamebuf);
+	strncpy(qnamebuf, qname, sizeof(qnamebuf));
+
+	if ((e = apr_hash_get(qname_hash, qnamebuf, APR_HASH_KEY_STRING )) == NULL) {
+		e = malloc(sizeof(struct qname_list));
+		strncpy(e->qname, qname, sizeof(e->qname));
+		e->count = 0;
+		apr_hash_set(qname_hash, e->qname, APR_HASH_KEY_STRING, e);
+		//printf("Match_QNAME:%s\n", qname);
+	}
+#endif
+}
+
+void load_qname_list(char *filename)
+{
+	int l;
+	char buff[512], *q;
+	FILE *fp;
+
+	if ((fp = fopen(filename, "r")) == NULL)
+		err(1, "cannot open %s", filename);
+	while(fgets(buff, sizeof buff, fp) != NULL) {
+		if (buff[0] == '#') continue;
+		q = strchr(buff, ',');
+		if (q == NULL || *q != ',') continue;
+		*q = 0;
+		register_qname_hash(buff);
+	}
+	fclose(fp);
+}
+
+void load_ipaddrlist(char *filename)
+{
 	char buff[512];
-	u_char addr[16];
 	int alen;
 	int l;
 	FILE *fp;
 	struct ipaddr_list *e;
 
-	ipaddr_hash = apr_hash_make(apr_pool);
-	
 	if ((fp = fopen(filename, "r")) == NULL)
 		err(1, "cannot open %s", filename);
 	while(fgets(buff, sizeof buff, fp) != NULL) {
 		if (buff[0] == '#') continue;
 		l = strlen(buff);
 		if (l > 0 && !isprint(buff[l-1])) buff[l-1] = 0;
-		if (strchr(buff, ':') != NULL) {
-			if (inet_pton(AF_INET6, buff, addr) == 0)
-				err(1, "cannot parse %s", buff);
-			alen = 16;
-		} else {
-			if (inet_pton(AF_INET, buff, addr) == 0)
-				err(1, "cannot parse %s", buff);
-			alen = 4;
-		}
-		e = malloc(sizeof(struct ipaddr_list));
-		e->alen = alen;
-		memcpy(e->addr, addr, alen);
-		e->count = 0;
-		apr_hash_set(ipaddr_hash, e->addr, e->alen, e);
+		register_ipaddr_port_hash(buff, &ipaddr_hash);
 	}
 	fclose(fp);
-#endif
 }
 
 void load_ipaddrlist_tld(char *tld)
 {
-#ifdef HAVE_APR_HASH_H
 	char buff[512];
 	u_char addr[16];
 	int alen;
@@ -721,8 +851,6 @@ void load_ipaddrlist_tld(char *tld)
 	FILE *fp;
 	char *p, *q;
 	struct ipaddr_list *e;
-
-	ipaddr_hash = apr_hash_make(apr_pool);
 
 	if ((fp = fopen(serverlist_file, "r")) == NULL)
 		err(1, "cannot open %s", serverlist_file);
@@ -743,27 +871,12 @@ void load_ipaddrlist_tld(char *tld)
 					*q = 0;
 					q++;
 				}
-				if (strchr(p, ':') != NULL) {
-					if (inet_pton(AF_INET6, p, addr) == 0)
-						err(1, "cannot parse %s", p);
-					alen = 16;
-				} else {
-					if (inet_pton(AF_INET, p, addr) == 0)
-						err(1, "cannot parse %s", p);
-					alen = 4;
-				}
-				e = malloc(sizeof(struct ipaddr_list));
-				e->alen = alen;
-				memcpy(e->addr, addr, alen);
-				e->count = 0;
-				apr_hash_set(ipaddr_hash, e->addr, e->alen, e);
-				//printf("Match_IP_address:%s:%s\n", tld, p);
+				register_ipaddr_port_hash(p, &ipaddr_hash);
 				p = q;
 			} while (p != NULL);
 		}
 	}
 	fclose(fp);
-#endif
 }
 
 
@@ -789,40 +902,37 @@ void usage(int c)
 "\n"
 "-F num	Debug flag\n"
 "-t num  Specify timezone offset (in second)\n"
-"-4 v4	Specify DNS server's IPv4 address\n"
-"-E v4	Specify IPv4 address of excluded client\n"
-"-m v4	Specify netmask for -a option\n"
-"-a v4	Specify allowed client address prefix\n"
+"-a ipaddr      print if the ipaddr matches source or destination address\n"
+"-f list	specify TLD/root server IP address list file\n"
 "-t TLD Match specified TLD servers\n"
 "	    requires -f option\n"
+"-I file Load IPaddrlist and print packets whose IP address matches\n"
+"-b ipaddr#port[,ipaddr#port,..]  specify other side IP addresses\n"
+"-J        print IPaddrlist\n"
+"-N file   Load qname list file and print packets whose qname matches\n"
+"-n qname  Sepficy qname: print packets whose qname matches\n"
 "-i XX,XX,XX : Exclude queries\n"
 "   XX: EDNS, noEDNS, DO, noDO, AD, noAD, RD, noRD,\n"
 "       TCP, UDP, OPCODE0, noOPCODE0,\n"
 "       TC, noTC, RCODE0, noRCODE0, ANCOUNT0, noANCOUNT0, noREF, REF (response)\n"
 "-p XX,XX,XX : Print DNS answer options\n"
-"       RefNS,RefGlue,AuthSOA,ANSWER,INFO,ALL\n"
+"       RefNS,RefGlue,AuthSOA,ANSWER,INFO,ALLRR\n"
+"       EDNSSIZE/FLAG/DNSLEN... print edns0udpsize,flag,dnslen on DNS query/answer\n"
 "-G size: print if DNS size is greater or equal to 'size'\n"
 "-L size: print if DNS size is smaller or equal to 'size'\n"
-"-f list	specify TLD/root server IP address list file\n"
 "-z	parse client side queries\n"
 "-R      Print response detail\n"
 "-o off	Timezone read offset\n"
-"-s	Specify source IPv4 address\n"
-"-S	Specify source IPv6 address\n"
-"-d	Specify destination IPv4 address\n"
-"-D	Specify destination IPv6 address\n"
 "-R	print response detail\n"
 "-O	Print EDNS0 option\n"
 "-g	Print Checksum Error\n"
 "-c	Print packets with checksum error only\n"
-"-b time	Data start time\n"
+"-s time	Data start time\n"
 "-l len	Data length (second)\n"
-"-I file Load IPaddrlist and print packets whose source address matches\n"
 "\n"
 "-Y	Print statistics\n"
 "-Z	Print label\n"
 "-W	decode WIDE cloud address\n"
-"-z      Client mode: -4/-6 specifies client IP addr, serverIPaddr is printed\n"
 "-r RD	specify RD=0 or RD=1 or -1:any\n"
 ,VERSION, __DATE__, __TIME__);
 	exit(1);
@@ -936,52 +1046,20 @@ void parse_args(int argc, char **argv, char *env)
 	u_int32_t mask4, addr4;
 	int print_answer_option = 0;
 
-	while ((ch = getopt_env(argc, argv, "b:t:4:6:em:a:q:BCYF:AQL:o:hvf:l:O:cgI:Wr:XzZG:s:S:d:D:i:BXp:", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "a:b:t:q:BCYF:AQL:o:hvf:l:O:cgI:JWr:XzZG:i:BXp:q:n:N:s:", env)) != -1) {
 	// printf("getopt: ch=%c optarg=%s\n", ch, optarg);
 	switch (ch) {
-	case '4':
-		if (inet_aton(optarg, (struct in_addr *)&server_ipv4) == 0)
-			err_exit(1, "bad IPv4 address: %s", optarg);
-		check_v4 = 1;
+	case 'n':
+		register_qname_hash(optarg);
 		break;
-	case '6':
-		if (inet_pton(AF_INET6, optarg, server_ipv6) != 1)
-			err_exit(1, "bad IPv6 address: %s", optarg);
-		check_v6 = 1;
-		break;
-	case 's':
-		if (inet_aton(optarg, (struct in_addr *)&src4) == 0)
-			err_exit(1, "bad IPv4 address: %s", optarg);
-		break;
-	case 'S':
-		if (inet_pton(AF_INET6, optarg, src6) != 1)
-			err_exit(1, "bad IPv6 address: %s", optarg);
-		break;
-	case 'd':
-		if (inet_aton(optarg, (struct in_addr *)&dest4) == 0)
-			err_exit(1, "bad IPv4 address: %s", optarg);
-		break;
-	case 'D':
-		if (inet_pton(AF_INET6, optarg, dest6) != 1)
-			err_exit(1, "bad IPv6 address: %s", optarg);
-		break;
-	case 'E':
-		if (inet_aton(optarg, (struct in_addr *)&exclude4[nexclude4]) == 0)
-			err_exit(1, "bad IPv4 address: %s", optarg);
-		nexclude4++;
-		check_v4 = 1;
-		break;
-	case 'm':
-		if (inet_aton(optarg, (struct in_addr *)&mask4) == 0)
-			err_exit(1, "bad IPv4 address: %s", optarg);
+	case 'N':
+		load_qname_list(optarg);
 		break;
 	case 'a':
-		if (inet_aton(optarg, (struct in_addr *)&addr4) == 0)
-			err_exit(1, "bad IPv4 address: %s", optarg);
-		v4mask[nv4mask].mask = mask4;
-		v4mask[nv4mask].addr = addr4;
-		nv4mask++;
-		check_v4 = 1;
+		register_ipaddr_port_hash(optarg, &ipaddr_hash);
+		break;
+	case 'b':
+		register_ipaddr_port_hash(optarg, &ipaddr2_hash);
 		break;
 	case 'C': print_queries_csv = 1; break;
 	case 'B': print_queries_bind9++;
@@ -1015,9 +1093,11 @@ void parse_args(int argc, char **argv, char *env)
 	case 'v': flag_v = 1; break;
 	case 'g': flag_print_error = 1; break;
 	case 'c': flag_checksumerror_only++; break;
-	case 'b': data_start = atoi(optarg); break;
+	case 's': data_start = atoi(optarg); break;
 	case 'l': data_time_length = atoi(optarg); break;
 	case 'I': load_ipaddrlist(optarg); break;
+	case 'J': flag_print_ipaddr_hash = 1;
+		  break;
 	case 'W': flag_wide_cloud = 1; break;
 	case 'f': serverlist_file = optarg; break;
 	case 't': if (serverlist_file != NULL) {
@@ -1025,6 +1105,7 @@ void parse_args(int argc, char **argv, char *env)
 			break;
 		  }
 		  err(1, "specify TLD server list\n");
+		  break;
 	case 'r':
 		select_rd = atoi(optarg);
 		if (select_rd < -1 || select_rd > 1 || 
@@ -1084,9 +1165,6 @@ int main(int argc, char *argv[])
 	c.tz_read_offset = tzread_offset;
 	if ((debug & (FLAG_MODE_PARSE_QUERY|FLAG_MODE_PARSE_ANSWER)) == 0)
 		debug |= FLAG_MODE_PARSE_QUERY;
-	if (check_v4 != 0 || check_v6 != 0 || src4[0] != 255 || src6[0] != 255 || dest4[0] != 255 || dest6[0] != 255) {
-		debug |= FLAG_DO_ADDRESS_CHECK;
-	}
 	if (print_query_counter == 0 && print_queries_csv == 0 && print_queries_bind9 == 0) {
 		print_queries_bind9 = 1;
 		debug |= FLAG_BIND9LOG;
@@ -1098,6 +1176,11 @@ int main(int argc, char *argv[])
 	}
 	if (data_start != 0 && data_time_length != 0)
 		data_end = data_start + data_time_length;
+
+#ifdef HAVE_APR_HASH_H
+	if (ipaddr_hash != NULL || ipaddr2_hash != NULL)
+		debug |= FLAG_DO_ADDRESS_CHECK;
+#endif
 
 	c.callback = callback;
 	c.debug = debug;
@@ -1125,6 +1208,10 @@ int main(int argc, char *argv[])
 		}
 	} else {
 		if (!flag_print_labels) usage(0);
+	}
+	if (flag_print_ipaddr_hash) {
+		print_ipaddr_hash("ipaddrhash", ipaddr_hash);
+		print_ipaddr_hash("ipaddr2hash", ipaddr2_hash);
 	}
 	if (print_statistics) {
 		if (print_queries_csv) {
