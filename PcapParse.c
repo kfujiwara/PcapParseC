@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.134 2020/08/06 07:28:32 fujiwara Exp $
+	$Id: PcapParse.c,v 1.138 2020/08/18 08:05:27 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -277,7 +277,7 @@ static u_char _edns0[] = { 0, 0, 41 };
 
 #define TCPBUF_BUFFLEN 4096
 #define TCPBUF_HEADERLEN 128
-#define TCPBUF_LEN 10
+#define TCPBUF_LEN 100
 
 struct TCPbuff {
 	int used;
@@ -290,7 +290,7 @@ struct TCPbuff {
 };
 static struct TCPbuff tcpbuff[TCPBUF_LEN];
 static int tcpbuff_used = -1;
-static int tcpbuff_max = 10;
+static int tcpbuff_max = TCPBUF_LEN;
 
 int parse_edns(struct DNSdataControl *d)
 {
@@ -602,7 +602,7 @@ void print_dns_answer(struct DNSdataControl *d)
 			}
 		} else {
 			if (print_answer && anssec > 0) {
-				printf("ANSWER: %s %d %d %d rdlen=%d", rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
+				printf("ANSSEC: %s %d %d %d rdlen=%d", rr_name, rr_type, rr_class, rr_ttl, rr_rdlength);
 				p = d->dns.dns + d->dns.pointer;
 				rr_rdlength0 = rr_rdlength;
 				while (rr_rdlength0-- > 0) {

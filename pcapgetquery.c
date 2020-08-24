@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.102 2020/08/06 09:32:51 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.103 2020/08/18 10:01:54 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -574,13 +574,14 @@ int callback(struct DNSdataControl *d, int mode)
 		}
 		inet_ntop(d->dns.af, d->dns.p_src, s_src, sizeof(s_src));
 		inet_ntop(d->dns.af, d->dns.p_dst, s_dst, sizeof(s_dst));
-#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,additionaldnssecrrs,dnslen,trnsport,FragSize,ans_ttl,cname_ttl,cname,a_aaaa"
+#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,tc,aa,additionaldnssecrrs,dnslen,trnsport,FragSize,ans_ttl,cname_ttl,cname,a_aaaa"
 		printf("%d.%06d,"       // timestamp
 			"%s,%d,%s,%d,"	// source, dest
 			"%s,%d,%d,"	// qname qclass qtype
 			"%d,%d,%d,"	// id qr rd
 			"%d,%d,%d,"	// edns0 edns0len do
-			"%d,%d,%d,"       // error rcode additionaldnssecrrs
+			"%d,%d,%d,%d,"  // error rcode tc aa
+			"%d,"		//  additionaldnssecrrs
 			"%d,%d,%d,"	// dnslen transport_type
 			"%d,%d,%s,",	// ans_ttl cname_ttl cnamelist
 			d->dns.tv_sec, d->dns.tv_usec,
@@ -589,7 +590,8 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.qname, d->dns.qclass, d->dns.qtype,
 			d->dns._id, d->dns._qr, d->dns._rd,
 			d->dns._edns0, d->dns._edns0 ? d->dns.edns0udpsize : 0, _do,
-			d->dns.error, d->dns._rcode, d->dns.additional_dnssec_rr,
+			d->dns.error, d->dns._rcode, d->dns._tc, d->dns._aa,
+			d->dns.additional_dnssec_rr,
 		    d->dns.dnslen, d->dns._transport_type, d->dns._fragSize,
 			d->dns.answer_ttl, d->dns.cname_ttl, d->dns.cnamelist);
 		for (i = 0; i < d->dns.n_ans_v4; i++) {
@@ -620,7 +622,7 @@ int callback(struct DNSdataControl *d, int mode)
 		if (typestr == NULL) sprintf(typestr = typestrbuff, "TYPE%u", d->dns.qtype);
 		if (classstr == NULL) sprintf(classstr = classstrbuff, "CLASS%u", d->dns.qclass);
 		if (print_queries_bind9 == 2) {
-			printf("%s%02d-%s-%04d %02d:%02d:%02d.%06d queries: info: client %s#%d: query: %s %s %s %s%s%s%s%s%s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%06d queries: info: client %s#%d: query: %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s\n",
 			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
@@ -630,12 +632,14 @@ int callback(struct DNSdataControl *d, int mode)
 	 		d->dns._rd ? "+" : "-", d->dns._edns0?"E":"",
  	 		d->dns.proto==6?"T":"",
 	 		d->dns._do?"D":"", d->dns._cd ? "C":"",
+			d->dns._tc?"/tc":"",
+			d->dns._aa?"/aa":"",
 	 		*d->dns.s_dst==0?"":"(",
 			d->dns.s_dst,
 	 		*d->dns.s_dst==0?"":")",
 			additional, additional2);
 		} else {
-			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s %s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s %s%s%s%s%s%s%s\n",
 			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
@@ -646,6 +650,8 @@ int callback(struct DNSdataControl *d, int mode)
 	 		d->dns._rd ? "+" : "-", d->dns._edns0?"E":"",
  	 		d->dns._transport_type>=T_TCP?"T":"",
 	 		d->dns._do?"D":"", d->dns._cd ? "C":"",
+			d->dns._tc?"/tc":"",
+			d->dns._aa?"/aa":"",
 	 		*d->dns.s_dst==0?"":"(",
 			d->dns.s_dst,
 	 		*d->dns.s_dst==0?"":")",

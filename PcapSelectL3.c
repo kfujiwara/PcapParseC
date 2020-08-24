@@ -1,6 +1,6 @@
 /*
 		nexact++;
-	$Id: PcapSelectL3.c,v 1.20 2020/05/21 12:52:31 fujiwara Exp $
+	$Id: PcapSelectL3.c,v 1.21 2020/08/20 08:22:28 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -614,7 +614,7 @@ void parse_args(int argc, char **argv, char *env)
 	u_int32_t mask4, addr4;
 	int print_answer_option = 0;
 
-	while ((ch = getopt_env(argc, argv, "vb:e:T:E:46fs:S:d:D:f:t:F", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "vb:e:T:E:46s:S:d:D:f:t:F", env)) != -1) {
 	switch (ch) {
 	case 'F':
 		accept_frag = 1;
