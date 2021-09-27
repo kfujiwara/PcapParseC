@@ -16,6 +16,25 @@ int bitmaptoindex(unsigned long long n)
 	return countbits(n - 1);
 }
 
+int countbit256(unsigned char *p)
+{
+	return countbits(*(unsigned long long *)p)
+	       + countbits(*(unsigned long long *)(p+8))
+	       + countbits(*(unsigned long long *)(p+16))
+	       + countbits(*(unsigned long long *)(p+24));
+}
+
+int countbit64k(unsigned char *p)
+{
+	unsigned long long *u = (unsigned long long *)p;
+	int i;
+	int sum = 0;
+	for (i = 0; i < 1024; i++) {
+		sum += countbits(*u++);
+	}
+	return sum;
+}
+
 #ifdef DEBUG_countbits
 #include <stdio.h>
 
@@ -32,7 +51,7 @@ void main()
 }
 #endif
 
-void set_bitmap(unsigned char *base, int pos, int value)
+void set_bitmap_func(unsigned char *base, int pos, int value)
 {
 	if (value) {
 		base[pos/8] |= (128 >> (pos % 8));
@@ -51,7 +70,7 @@ void merge_bitmap(unsigned char *dest, unsigned char *src, int length)
 	int i, l;
 	l = (length+7)/8;
 	for (i = 0; i < l; i++) {
-		*dest++ |= *src++;
+		dest[i] |= src[i];
 	}
 }
 

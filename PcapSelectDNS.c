@@ -1,5 +1,5 @@
 /*
-	$Id: PcapSelectDNS.c,v 1.7 2018/08/03 05:17:46 fujiwara Exp $
+	$Id: PcapSelectDNS.c,v 1.11 2021/04/15 11:49:20 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -57,10 +57,11 @@
 #ifdef HAVE_MATH_H
 #include <math.h>
 #endif
-#ifdef HAVE_APR_HASH_H
-#include <apr_hash.h>
+#ifdef HAVE_ERR_H
+#include <err.h>
 #endif
 
+#include "ext/uthash.h"
 #include "PcapParse.h"
 
 /*****************************************************************************
@@ -101,71 +102,37 @@ static u_char client_ipv6[16] = { 255 };
 int check_v4 = 0;
 int check_v6 = 0;
 
-struct {
-	char *dom;
-	int len;
-} doms[100];
-int ndoms = 0;
-
 FILE *wfp = NULL;
 
-#ifdef HAVE_APR_HASH_H
-typedef struct ipaddr_list {
+struct dom_hash_ {
+	UT_hash_handle hh;
 	int count;
-	u_int alen;
-	u_char addr[16];
-};
-
-static apr_pool_t *pool = NULL;
-static apr_hash_t *ipaddr_hash = NULL;
-#endif
+	char *dom;
+} *dom_hash = NULL;
 
 int callback(struct DNSdataControl *c, int mode)
 {
-	int len = strlen((char *)c->dns.qname);
-	u_char *u;
+	char *p;
 	int found = 0;
-	int i;
 	struct pcap_header ph;
-#ifdef HAVE_APR_HASH_H
-	struct ipaddr_list *e;
-#endif
+	struct dom_hash_ *e;
+
 	if (mode == CALLBACK_ADDRESSCHECK) {
 		return 1;
 	}
-#ifdef HAVE_APR_HASH_H
-	if (ipaddr_hash != NULL) {
-		e = (struct ipaddr_list *)apr_hash_get(ipaddr_hash, c->dns.req_src, c->dns.alen);
-		if (e == NULL) return 0;
+	p = (char *)c->dns.qname;
+	e = NULL;
+	while(*p != 0) {
+		HASH_FIND_STR(dom_hash, p, e);
+		if (e != NULL) break;
+		p = strchr(p, '.');
+		if (p == NULL) break;
+		p++;
+	}
+	if (e != NULL) {
 		e->count++;
 		found = 1;
 	}
-#endif
-	if (found == 0) {
-	  for (i = 0, found = 0; i < ndoms; i++) {
-	    if (len == doms[i].len && strcasecmp((char *)c->dns.qname, doms[i].dom) == 0) {
-	      found = 1;
-	      break;
-	    }
-	    else if (flag_exact_match == 0 && len > doms[i].len && strcasecmp((char *)c->dns.qname + len - doms[i].len, doms[i].dom) == 0 && c->dns.qname[len-doms[i].len-1] == '.') {
-	      found = 1;
-	      break;
-	    }
-	  }
-	}
-	//printf("compare:qname=%s:doms=%s:ndoms=%d:found=%d\n", (char *)c->dns.qname, doms[0].dom, ndoms, found);
-#if 0
-	if (found == 0) {
-		if (c->dns.version == 4 && check_v4 != 0) {
-			if (client_ipv4 == *(u_int32_t *)(c->dns.req_src))
-				found = 1;
-		} else
-		if (c->dns.version == 6 && check_v6 != 0) {
-			if (memcmp(client_ipv6, c->dns.req_src, 16) == 0)
-				found = 1;
-		}
-	}
-#endif
 	if (found == 0) { return 0; }
 	ph.ts.tv_sec = c->dns.tv_sec;
 	ph.ts.tv_usec = c->dns.tv_usec;
@@ -192,22 +159,21 @@ void usage()
 
 int main(int argc, char *argv[])
 {
-	FILE *fp;
 	char *p;
 	char *outputfile = NULL;
 	int len;
-	char buff[256];
 	int ret;
 	int ch;
+	int mode = 0;
+	struct dom_hash_ *dom;
 	struct pcap_file_header pfw;
 	struct DNSdataControl c;
-
 	memset((void *)&c, 0, sizeof(&c));
 
 	while ((ch = getopt(argc, argv, "Ao:el:4:6:")) != -1) {
 	switch (ch) {
 	case 'A':
-		debug |= FLAG_MODE_PARSE_ANSWER;
+		mode |= MODE_PARSE_ANSWER;
 		break;
 	case 'e':
 		flag_exact_match = 1;
@@ -216,9 +182,14 @@ int main(int argc, char *argv[])
 		outputfile = strdup(optarg);
 		break;
 	case 'l':
-		doms[ndoms].dom = strdup(optarg);
-		doms[ndoms].len = strlen(optarg);
-		ndoms++;
+		len = strlen(optarg);
+		p = malloc(len+1+sizeof(struct dom_hash_));
+		dom = (struct dom_hash_ *) (p + len + 1);
+		dom->dom = p;
+		dom->count = 0;
+		memcpy(p, optarg, len);
+		p[len] = 0;
+		HASH_ADD_STR(dom_hash, dom, dom);
 		break;
 	case '4':
 		if (inet_aton(optarg, (struct in_addr *)&client_ipv4) == 0)
@@ -241,7 +212,8 @@ int main(int argc, char *argv[])
 
 	c.callback = callback;
 	c.otherdata = NULL;
-	c.debug = FLAG_IGNOREERROR | FLAG_MODE_PARSE_QUERY;
+	c.mode = MODE_IGNOREERROR | MODE_PARSE_QUERY;
+	c.debug = debug;
 
 	if (outputfile == NULL) { printf("#Error:No outputfilename\n"); exit(1); };
 	if ((wfp = fopen(outputfile, "w")) == NULL) {

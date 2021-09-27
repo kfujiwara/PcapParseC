@@ -1,6 +1,6 @@
 /*
 		nexact++;
-	$Id: PcapL3Print.c,v 1.6 2019/04/24 07:50:28 fujiwara Exp $
+	$Id: PcapL3Print.c,v 1.9 2021/04/15 11:49:20 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -56,7 +56,11 @@
 #ifdef HAVE_STRING_H
 #include <string.h>
 #endif
+#ifdef HAVE_ERR_H
+#include <err.h>
+#endif
 
+#include "ext/uthash.h"
 #include "PcapParse.h"
 
 int start = -1;
@@ -148,13 +152,9 @@ int _pcapL3print(FILE *fp)
 	int len;
 	int l2header = 0;
 	long long offset = 0;
-	long long offset2;
-	int i;
-	int match;
 	int frag;
 	int srcp;
 	int dstp;
-	double d;
 	int iplen;
 	int af;
 	int udpsize;
@@ -276,7 +276,7 @@ int _pcapL3print(FILE *fp)
 		} else continue;
 		// timestamp,source,sport,dest,dport,caplen,frag,proto
 		if (!ignore)
-			printf("%ld.%06ld,%s,%d,%s,%d,%d,%d,%d,%d\n", 
+			printf("%d.%06d,%s,%d,%s,%d,%d,%d,%d,%d\n", 
 			ph.ts.tv_sec, ph.ts.tv_usec,
 			       src, srcp, dst, dstp,
 			       iplen, frag, proto, udpsize);

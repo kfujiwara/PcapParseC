@@ -1,5 +1,7 @@
 int countbits(unsigned long long n);
 int bitmaptoindex(unsigned long long n);
+int countbit256(unsigned char *p);
+int countbit64k(unsigned char *p);
 
 #define set_bitmap(base, pos, value) \
 	if ((value)) { \
@@ -16,3 +18,5 @@ int bitmaptoindex(unsigned long long n);
 void merge_bitmap(unsigned char *dest, unsigned char *src, int length);
 int strtobitmap(char *string, char **next, unsigned char *bitmap, int limit);
 
+int get_bitmap_func(unsigned char *base, int pos);
+void set_bitmap_func(unsigned char *base, int pos, int value);

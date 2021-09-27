@@ -42,16 +42,25 @@ size_t  a_pos = 0;
 size_t  a_limit = 512 * 1024;
 size_t  a_count = 0;
 
-void *my_malloc(size_t _size)
+void *my_malloc(int _size)
 {
 	u_char *p;
 	int a;
 
 	if (a_base == NULL || a_pos + _size + 7 > a_limit) {
+		if (a_limit < _size) {
+			p = malloc(_size);
+			memset((void *)p, 0, _size);
+			if (p == NULL) {
+				printf("#Error:malloc:size=%d\n", _size);
+				exit(1);
+			}
+			return p;
+		}
 		a_base = malloc(a_limit);
 		a_pos = 0;
 		if (a_base == NULL) {
-			printf("#Error:malloc:count=%zu:%p %zu %zu: %zu : errno=%d\n", a_count, a_base, a_pos, a_limit, _size, errno);
+			printf("#Error:malloc:count=%zu:%p %zu %zu: %d : errno=%d\n", a_count, a_base, a_pos, a_limit, _size, errno);
 
 			exit(1);
 		}
@@ -95,25 +104,6 @@ void err(int err, char *format, ...)
 	exit(err);
 }
 #endif
-
-int countbit256(u_char *p)
-{
-	return countbits(*(unsigned long long *)p)
-	       + countbits(*(unsigned long long *)(p+8))
-	       + countbits(*(unsigned long long *)(p+16))
-	       + countbits(*(unsigned long long *)(p+24));
-}
-
-int countbit64k(u_char *p)
-{
-	unsigned long long *u = (unsigned long long *)p;
-	int i;
-	int sum = 0;
-	for (i = 0; i < 1024; i++) {
-		sum += countbits(*u++);
-	}
-	return sum;
-}
 
 long long getint(char *src, char **next, int *error, int errorcode)
 {
@@ -169,6 +159,34 @@ double getfloat(char *src, char **next, int *error, int errorcode)
 	else
 	if (**next != 0) { *error = errorcode; return 0; }
 	return d;
+}
+
+void getstring(char *src, char **next, int *error, int errorcode, char *str, int len)
+{
+	char *p;
+	int l, ll;
+	if (*error) return;
+	if (src != NULL && *src != 0) {
+		p = strchr(src, ',');
+		if (p == NULL) {
+			ll = strlen(src);
+			l = ll;
+			if (l >= len) { l = len - 1; }
+			memcpy(str, src, l);
+			str[l] = 0;
+			*next = src+ll;
+			return;
+		}
+		if (*p == ',') {
+			l = p - src;
+			if (l >= len) { l = len - 1; }
+			memcpy(str, src, l);
+			str[l] = 0;
+			*next = p + 1;
+			return;
+		}
+	}
+	*error = errorcode;
 }
 
 void skipcomma(char *src, char **next, int num, int *error, int errorcode)
