@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.135 2021/08/30 03:37:51 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.142 2022/02/17 04:03:47 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -141,7 +141,8 @@ int ignore_noANCOUNT0 = 0;
 int ignore_REF = 0;
 int ignore_noREF = 0;
 int inverse_match_qname = 0;
-int print_tcp_delay_larger_than = -1;
+int print_tcp_delay_longer_than = -1;
+int print_tcp_delay_shorter_than = -1;
 
 static struct ignore_options {
 	char *name;
@@ -196,7 +197,6 @@ int flag_filter_ednsopt = 0;
 int flag_print_ednsopt = 1;
 int flag_error_only = 0;
 int flag_print_error = 1;
-int flag_wide_cloud = 0;
 int flag_print_labels = 0;
 int flag_greater_than = -1;
 int flag_smaller_than = -1;
@@ -208,8 +208,6 @@ int count_printed = 0;
 int count_notprinted = 0;
 int flag_print_ipaddr_hash = 0;
 char * serverlist_file = NULL;
-
-u_char wide_cloud_prefix[] = { 0x20, 0x01, 0x02, 0x00, 0x0d, 0x00, 0x01, 0x00, 0,0,0,0 };
 
 u_int32_t data_start = 0;
 u_int32_t data_end = 0;
@@ -418,8 +416,10 @@ int callback(struct DNSdataControl *d, int mode)
 	struct ipaddr_hash *is1, *id1, *i1;
 	struct ipaddr_hash *is2, *id2, *i2;
 	struct qname_hash *qh;
-	char s_src[256];
-	char s_dst[256];
+	char *s_src;
+	int p_sport;
+	char *s_dst;
+	int p_dport;
 	char additional[40] = "";
 	char additional2[4096] = "";
 
@@ -528,9 +528,14 @@ int callback(struct DNSdataControl *d, int mode)
 	if (flag_smaller_than > 0 && d->dns.dnslen > flag_smaller_than) return 0;
 	if (flag_filter_ednsopt != 0 && d->dns._edns_rdlen == 0)
 		return 0;
-	if (print_tcp_delay_larger_than >= 0) {
-		//if (d->dns.tcp_delay <= 0) return 0;
-		if (d->dns.tcp_delay < print_tcp_delay_larger_than * 1000)
+	if (print_tcp_delay_longer_than >= 0) {
+		if (d->dns.tcp_delay <= 0 ||
+		    d->dns.tcp_delay < print_tcp_delay_longer_than)
+			return 0;
+	}
+	if (print_tcp_delay_shorter_than >= 0) {
+		if (d->dns.tcp_delay <= 0 ||
+		    d->dns.tcp_delay > print_tcp_delay_shorter_than)
 			return 0;
 	}
 	if (print_response_detail) {
@@ -538,6 +543,11 @@ int callback(struct DNSdataControl *d, int mode)
 	}
 	p = additional2;
 	len = sizeof(additional2);
+	if (d->dns._qr == 1) {
+		l = sprintf(p, " rcode=%d", d->dns._rcode);
+		p += l;
+		len -= l;
+	}
 	if (flag_print_ednsopt != 0 && d->dns._edns0 != 0 && d->dns._edns_rdlen != 0) {
 		l = print_ednsoptions(d, p, len);
 		p += l;
@@ -577,20 +587,15 @@ int callback(struct DNSdataControl *d, int mode)
 		p += l;
 		len -= l;
 	}
-	if (flag_wide_cloud) {
-		if (d->dns.af == AF_INET6 && memcmp(d->dns.req_src, wide_cloud_prefix, 12) == 0) {
-			inet_ntop(AF_INET, d->dns.req_src+12, (char *)d->dns.s_src, sizeof(d->dns.s_src));
-		}
-	}
 	if (print_queries_csv) {
 		_do = d->dns._do;
 		if (d->dns._do == 0 && d->dns.additional_dnssec_rr > 0) {
 			_do = 1;
 		}
-		inet_ntop(d->dns.af, d->dns.p_src, s_src, sizeof(s_src));
-		inet_ntop(d->dns.af, d->dns.p_dst, s_dst, sizeof(s_dst));
+		s_src = d->dns.s_src;
+		s_dst = d->dns.s_dst;
 		if (print_filename) { printf("%s,", d->filename); }
-#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,str_rcode,tc,aa,additionaldnssecrrs,dnslen,transport,FragSize,tcp_dnscount,tcp_fastopen,tcp_mss,tcp_delay,soa_ttl,soa_dom,ans_ttl,cname_ttl,cname,a_aaaa,"
+#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,str_rcode,tc,aa,additionaldnssecrrs,dnslen,transport,FragSize,ip_df,tcp_dnscount,tcp_fastopen,tcp_mss,tcp_delay,soa_ttl,soa_dom,ans_ttl,cname_ttl,cname,a_aaaa,"
 		printf("%d.%06d,"       // timestamp
 			"%s,%d,%s,%d,"	// source, dest
 			"%s,%d,%d,"	// qname qclass qtype
@@ -598,8 +603,9 @@ int callback(struct DNSdataControl *d, int mode)
 			"%d,%d,%d,"	// edns0 edns0len do
 			"%d,%d,%s,%d,%d,"  // error rcode StrRcode tc aa
 			"%d,"		//  additionaldnssecrrs
-			"%d,%d,%d,"	// dnslen transport_type
-			"%d,%d,%d,%f"	// tcp_dnscount tcp_fastopen
+			"%d,%d,%d,"	// dnslen transport_type FragSize
+			"%d,"           // ip_df
+			"%d,%d,%d,%f,"	// tcp_dnscount tcp_fastopen
 					// tcp_mss tcp_delay
 			"%d,%s,"        // soa_ttl soa_dom
 			"%d,%d,"	// ans_ttl cname_ttl
@@ -609,16 +615,21 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.s_src, d->dns.p_sport,
 			d->dns.s_dst, d->dns.p_dport,
 			d->dns.qname, d->dns.qclass, d->dns.qtype,
-			d->dns._id, d->dns._qr, d->dns._rd,
+			d->dns._id, d->dns._qr?1:0, d->dns._rd?1:0,
 			d->dns._edns0, d->dns._edns0 ? d->dns.edns0udpsize : 0, _do,
-			d->dns.error, d->dns._rcode, d->dns.str_rcode==NULL?"":d->dns.str_rcode, d->dns._tc, d->dns._aa,
+			d->dns.error, d->dns._rcode, d->dns.str_rcode==NULL?"":d->dns.str_rcode,
+				d->dns._tc?1:0, d->dns._aa?1:0,
 			d->dns.additional_dnssec_rr,
 			d->dns.dnslen, d->dns._transport_type, d->dns._fragSize,
+			d->dns.ip_df,
 			d->dns.tcp_dnscount, d->dns.tcp_fastopen,
 			d->dns.tcp_mss,
 			(double)d->dns.tcp_delay/1000000.0,
-			d->dns.soa_ttl, d->dns.soa_dom,
-			d->dns.answer_ttl, d->dns.cname_ttl, d->dns.cnamelist);
+			d->dns.soa_ttl,
+			(d->dns.soa_dom==NULL)?"":(d->dns.soa_dom),
+			d->dns.answer_ttl,
+			d->dns.cname_ttl,
+			(d->dns.cnamelist==NULL)?"":(d->dns.cnamelist));
 		for (i = 0; i < d->dns.n_ans_v4; i++) {
 			inet_ntop(AF_INET, d->dns.ans_v4[i], addrstr, sizeof(addrstr));
 			printf("%s/", addrstr);
@@ -647,8 +658,19 @@ int callback(struct DNSdataControl *d, int mode)
 	 	classstr = class2str(d->dns.qclass);
 		if (typestr == NULL) sprintf(typestr = typestrbuff, "TYPE%u", d->dns.qtype);
 		if (classstr == NULL) sprintf(classstr = classstrbuff, "CLASS%u", d->dns.qclass);
+		if (d->dns._qr == 0) {
+			s_src = d->dns.s_src;
+			s_dst = d->dns.s_dst;
+			p_sport = d->dns.p_sport;
+			p_dport = d->dns.p_dport;
+		} else {
+			s_src = d->dns.s_dst;
+			s_dst = d->dns.s_src;
+			p_sport = d->dns.p_dport;
+			p_dport = d->dns.p_sport;
+		}
 		if (print_queries_bind9 == 2) {
-			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
@@ -659,17 +681,19 @@ int callback(struct DNSdataControl *d, int mode)
 	 		d->dns._do?"D":"", d->dns._cd ? "C":"",
 			d->dns._tc?"/tc ":"",
 			d->dns._aa?"/aa ":"",
+			d->dns.ip_df?"/df ":"",
 	 		*d->dns.s_dst==0?"":"(",
 			d->dns.s_dst,
 	 		*d->dns.s_dst==0?"":")",
 			additional, additional2);
 		} else {
-			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s%s%s%s%s%s%s %s%s%s\n",
 			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
 	 		d->dns.tv_usec/1000,
-	 		d->dns.s_src, d->dns.req_sport,
+			s_src,
+	 		p_sport,
 			d->dns.qname,
 	 		d->dns.qname, classstr, typestr,
 	 		d->dns._rd ? "+" : "-", d->dns._edns0?"E":"",
@@ -677,11 +701,9 @@ int callback(struct DNSdataControl *d, int mode)
 	 		d->dns._do?"D":"", d->dns._cd ? "C":"",
 			d->dns._tc?"/tc ":"",
 			d->dns._aa?"/aa ":"",
-	 		*d->dns.s_dst==0?"":"(",
-			d->dns.s_dst,
-	 		*d->dns.s_dst==0?"":")",
-			d->dns._qr != 0 ? " ": "",
-			d->dns.str_rcode,
+			d->dns.ip_df?"/df ":"",
+	 		*s_dst==0?"":"(", s_dst, *s_dst==0?"":")",
+			d->dns.str_rcode == NULL ? "":d->dns.str_rcode,
 			additional, additional2);
 		}
 		if (do_print_dns_answer > 1 && (d->mode & MODE_PARSE_ANSWER)) {
@@ -929,10 +951,11 @@ void usage(int c)
 "-c	Print packets with error only\n"
 "-s time	Data start time\n"
 "-l len	Data length (second)\n"
+"-T msec	Print packets if RTT >= msec\n"
+"-T -msec	Print packets if RTT < msec\n"
 "\n"
 "-Y	Print statistics\n"
 "-Z	Print label\n"
-"-W	decode WIDE cloud address\n"
 "-r RD	specify RD=0 or RD=1 or -1:any\n"
 "\n"
 "Result: CSV mode (-C) ... see with -Z option\n"
@@ -1051,9 +1074,9 @@ void parse_args(int argc, char **argv, char *env)
 {
 	int ch;
 	int print_answer_option = 0;
-	int t;
+	double t;
 
-	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:JWr:XZG:x:BXp:q:n:N:s:y", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:Jr:XZG:x:BXp:q:n:N:s:y", env)) != -1) {
 	// printf("getopt: ch=%c optarg=%s\n", ch, optarg);
 	switch (ch) {
 	case 'B':
@@ -1109,7 +1132,6 @@ void parse_args(int argc, char **argv, char *env)
 	case 'I': load_ipaddrlist(optarg); break;
 	case 'J': flag_print_ipaddr_hash = 1;
 		  break;
-	case 'W': flag_wide_cloud = 1; break;
 	case 'f': serverlist_file = optarg; break;
 	case 't': if (serverlist_file != NULL) {
 			load_ipaddrlist_tld(optarg);
@@ -1143,7 +1165,12 @@ void parse_args(int argc, char **argv, char *env)
 		flag_ignore_error = 1;
 		break;
 	case 'T':
-		print_tcp_delay_larger_than = atoi(optarg);
+		t = atof(optarg);
+		if (t >= 0) {
+			print_tcp_delay_longer_than = t * 1000;
+		} else {
+			print_tcp_delay_shorter_than = -t * 1000;
+		}
 		break;
 	case '?':
 	default:
@@ -1158,6 +1185,7 @@ int main(int argc, char *argv[])
 	int ret;
 	char *env;
 	struct DNSdataControl c;
+	char buff2[1024];
 
 	memset(&c, 0, sizeof(c));
 	env = getenv(ENVNAME);
@@ -1208,8 +1236,26 @@ int main(int argc, char *argv[])
 				}
 			}
 		}
-	} else {
+	} else
+	if (isatty(fileno(stdin)) == 1) {
 		if (!flag_print_labels) usage(0);
+	} else {
+		while (fgets(buff2, sizeof buff2, stdin) != NULL) {
+			ret = strlen(buff2);
+			if (ret > 0 && buff2[ret-1] == '\n') {
+				buff2[ret-1] = 0;
+			}
+			p = strchr(buff2, ',');
+			if (p != NULL) { *p = 0; }
+printf("Loading %s\n", buff2);
+			ret = parse_pcap(buff2, &c);
+			if (ret != ParsePcap_NoError) {
+				printf("#Error:%s:%s:errno=%d\n", parse_pcap_error(ret), buff2, errno);
+				if (flag_ignore_error == 0) {
+					exit(1);
+				}
+			}
+		}
 	}
 	if (flag_print_ipaddr_hash) {
 		print_ipaddr_hash("ipaddrhash", ipaddr_hash);

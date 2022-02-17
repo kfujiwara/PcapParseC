@@ -1,5 +1,5 @@
 /*
-	$Id: PcapSelectL3.c,v 1.33 2021/05/13 04:33:05 fujiwara Exp $
+	$Id: PcapSelectL3.c,v 1.35 2021/10/18 17:44:14 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -72,12 +72,15 @@ int accept_v6 = 0;
 int accept_tcp = 0;
 int accept_udp = 0;
 int accept_frag = 0;
+int accept_query = 0;
+int accept_reply = 0;
 double exact[100];
 int nexact = 0;
 int opt_v = 0;
 int print_hash = 0;
 int single_file = 0;
 int ignore_shortread = 0;
+int cut_num_packets = -1;
 char *serverlist_file = NULL;
 char *Logfile = NULL;
 FILE * LogFP = NULL;
@@ -111,7 +114,7 @@ struct ipaddr_hash {
 	UT_hash_handle hh;
 };
 
-static struct ipaddr_hash *ipaddr_hash = NULL;
+static struct ipaddr_hash *ipaddr1_hash = NULL;
 static struct ipaddr_hash *ipaddr2_hash = NULL;
 
 // ipaddr/portno
@@ -480,27 +483,35 @@ int parse_packet(FILE *wfp, long long ts, u_char *_ip, int _iplen)
 			match_frag = 1;
 		}
 	}
-	if (ipaddr_hash != NULL) {
-		HASH_FIND(hh, ipaddr_hash, ip_src+2, alen, is1);
-		if (is1 == NULL) HASH_FIND(hh, ipaddr_hash, ip_src, alen+2, is1);
-		HASH_FIND(hh, ipaddr_hash, ip_dst+2, alen, id1);
-		if (id1 == NULL) HASH_FIND(hh, ipaddr_hash, ip_dst, alen+2, id1);
+	if (ipaddr1_hash != NULL) {
+		if (accept_query) {
+			HASH_FIND(hh, ipaddr1_hash, ip_src+2, alen, is1);
+			if (is1 == NULL) HASH_FIND(hh, ipaddr1_hash, ip_src, alen+2, is1);
+		}
+		if (accept_reply) {
+			HASH_FIND(hh, ipaddr1_hash, ip_dst+2, alen, id1);
+			if (id1 == NULL) HASH_FIND(hh, ipaddr1_hash, ip_dst, alen+2, id1);
+		}
 		i1 = (is1 != NULL) ? is1 : id1;
 	} else {
 		i1 = NULL;
 	}
 	if (ipaddr2_hash != NULL) {
-		HASH_FIND(hh, ipaddr2_hash, ip_src+2, alen, is2);
-		if (is2 == NULL) HASH_FIND(hh, ipaddr2_hash, ip_src, alen+2, is2);
-		HASH_FIND(hh, ipaddr2_hash, ip_dst+2, alen, id2);
-		if (id2 == NULL) HASH_FIND(hh, ipaddr2_hash, ip_dst, alen+2, id2);
+		if (accept_reply) {
+			HASH_FIND(hh, ipaddr2_hash, ip_src+2, alen, is2);
+			if (is2 == NULL) HASH_FIND(hh, ipaddr2_hash, ip_src, alen+2, is2);
+		}
+		if (accept_query) {
+			HASH_FIND(hh, ipaddr2_hash, ip_dst+2, alen, id2);
+			if (id2 == NULL) HASH_FIND(hh, ipaddr2_hash, ip_dst, alen+2, id2);
+		}
 		i2 = (is2 != NULL) ? is2 : id2;
 	} else {
 		i2 = NULL;
 	}
 	if (i1 != NULL) i1->count++;
 	if (i2 != NULL) i2->count++;
-	ignore = (ipaddr_hash != NULL && i1 == NULL)
+	ignore = (ipaddr1_hash != NULL && i1 == NULL)
 		|| (ipaddr2_hash != NULL && i2 == NULL)
 		|| (accept_frag != 0 && match_frag != 0)
 		|| (match_proto == 0 && match_frag == 0)
@@ -597,6 +608,7 @@ int pcap_cleanup(FILE *wfp, int argc, char **argv)
 		if (ret != 0) {
 			prev = pcapfiles[found].ts;
 			if (opt_v>0) printf("writing: %d bytes. ts=%lld delta=%lld path=%s\n", iplen, pcapfiles[found].ts, pcapfiles[found].ts-prev, pcapfiles[found].path);
+			if (--cut_num_packets == 0) return 0;
 		}
 		prev = pcapfiles[found].ts;
 		error = pcap_read(&pcapfiles[found]);
@@ -691,15 +703,18 @@ void usage(int c)
 "  -B begin\n"
 "  -E end\n"
 "  -e exact_match_time (multiple, max 10)\n"
-"  -a ipaddr[#port],...   set ipaddress match list1\n"
+"  -a ipaddr[#port],...   set ipaddress match list client side\n"
 "  -I file      Load IPaddrlist into list1\n"
-"  -b ipaddr#port[,ipaddr#port,..]  specify other side IP addresses\n"
+"  -b ipaddr#port[,ipaddr#port,..]  set ipaddress match list server side\n"
 "  -f list	specify TLD/root server IP address list file\n"
-"  -t TLD Match specified TLD servers\n"
+"  -t TLD Match specify ipaddress match list server side to TLD servers\n"
 "	    requires -f option\n"
 "  -T       TCP only\n"
 "  -U       UDP only\n"
+"  -Q       Query (source== -a list, dest== -b list)\n"
+"  -R       Response (query== -b list, dest== -a list)\n"
 "  -S       Single file\n"
+"  -n NN    Cut NN packets\n"
 "fragment\n"
 "  -f\n");
 
@@ -754,8 +769,10 @@ void parse_args(int argc, char **argv, char *env)
 {
 	int ch;
 
-	while ((ch = getopt_env(argc, argv, "vB:E:O:E:46a:b:f:t:FI:SsHL:TU", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "vB:E:O:E:46a:b:f:t:FI:SsHL:TUn:QR", env)) != -1) {
 	switch (ch) {
+	case 'Q': accept_query = 1; break;
+	case 'R': accept_reply = 1; break;
 	case 'F': accept_frag = 1; break;
 	case '4': accept_v4 = 1; break;
 	case '6': accept_v6 = 1; break;
@@ -767,16 +784,16 @@ void parse_args(int argc, char **argv, char *env)
 		/*printf("-E %s is parsed as tv_sec=%d tv_usec=%d\n", optarg, exact_time_sec, exact_time_usec);*/
 		break;
 	case 'a':
-		register_ipaddr_port_hash(optarg, &ipaddr_hash);
+		register_ipaddr_port_hash(optarg, &ipaddr1_hash);
 		break;
 	case 'b':
 		register_ipaddr_port_hash(optarg, &ipaddr2_hash);
 		break;
 	case 'v': opt_v++; break;
-	case 'I': load_ipaddrlist(optarg, &ipaddr_hash); break;
+	case 'I': load_ipaddrlist(optarg, &ipaddr1_hash); break;
 	case 'f': serverlist_file = optarg; break;
 	case 't': if (serverlist_file != NULL) {
-		  	load_ipaddrlist_tld(optarg, &ipaddr_hash);
+		  	load_ipaddrlist_tld(optarg, &ipaddr1_hash);
 			break;
 		  }
 		  err(1, "specify TLD server list\n");
@@ -786,6 +803,7 @@ void parse_args(int argc, char **argv, char *env)
 	case 'H': print_hash = 1; break;
 	case 'T': accept_tcp = 1; break;
 	case 'U': accept_udp = 1; break;
+	case 'n': cut_num_packets = atoi(optarg); break;
 	case '?':
 	default:
 		usage(ch);
@@ -809,8 +827,8 @@ int main(int argc, char *argv[])
 	argv += optind;
 	if (print_hash) {
 		printf("begin=%lld end=%lld\n", begin, end);
-		printf("ipaddr_hash=\n");
-		print_ipaddrlist_hash(ipaddr_hash);
+		printf("ipaddr1_hash=\n");
+		print_ipaddrlist_hash(ipaddr1_hash);
 		printf("ipaddr2_hash=\n");
 		print_ipaddrlist_hash(ipaddr2_hash);
 		exit(1);
@@ -820,6 +838,10 @@ int main(int argc, char *argv[])
 	}
 	if (accept_tcp == 0 && accept_udp == 0) {
 	  accept_tcp = 1; accept_udp = 1;
+	}
+	if (accept_query == 0 && accept_reply == 0) {
+		accept_query = 1;
+		accept_reply = 1;
 	}
 	if (argc < 1) { usage(-1); }
 	if ((wfp = fopen(*argv, "wx")) == NULL) {

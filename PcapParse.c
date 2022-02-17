@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.186 2021/09/03 05:01:42 fujiwara Exp $
+	$Id: PcapParse.c,v 1.196 2022/02/10 10:03:39 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -423,14 +423,9 @@ void parse_DNS_query(struct DNSdataControl *d)
 {
 	int c;
 
-	d->dns.req_sport = d->dns.p_sport;
-	d->dns.req_dport = d->dns.p_dport;
-	d->dns.req_src = d->dns.p_src;
-	d->dns.req_dst = d->dns.p_dst;
-
 	d->ParsePcapCounter._dns_query++;
-	inet_ntop(d->dns.af, d->dns.req_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
-	inet_ntop(d->dns.af, d->dns.req_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
+	inet_ntop(d->dns.af, d->dns.p_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
+	inet_ntop(d->dns.af, d->dns.p_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
 
 	if (d->dns.version == 6 && (d->dns.p_src[0] & 0xfc) == 0xfc) {
 		return;
@@ -506,12 +501,8 @@ void print_dns_answer(struct DNSdataControl *d)
 	c = get_dname(&d->dns, rr_name, sizeof(rr_name), GET_DNAME_NO_COMP | ((d->debug & FLAG_BIND9LOG) ? GET_DNAME_BIND9LOG : 0), &d->dns.case_stats);
 	rr_type = get_uint16(&d->dns);
 	rr_class = get_uint16(&d->dns);
-	if (d->dns.req_src[0] == 0) {
-		inet_ntop(d->dns.af, d->dns.req_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
-		inet_ntop(d->dns.af, d->dns.req_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
-	}
 	if (print_info) {
-		printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%02x:%02x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", d->dns.s_src, d->dns.req_sport, d->dns.s_dst, d->dns.req_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag1, d->dns._flag2, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
+		printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%02x:%02x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", d->dns.s_src, d->dns.p_sport, d->dns.s_dst, d->dns.p_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag1, d->dns._flag2, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
 	}
 	anssec = d->dns.dns[7];
 	authsec = d->dns.dns[9];
@@ -650,6 +641,8 @@ static char *rcodestr[] = {
 "Rcode14",
 "Rcode15",
 "NoDATA",
+"Referral",
+"Truncated",
 };
 void parse_DNS_answer(struct DNSdataControl *d)
 {
@@ -669,10 +662,6 @@ void parse_DNS_answer(struct DNSdataControl *d)
 
 	d->ParsePcapCounter._dns_response++;
 
-	d->dns.req_sport = d->dns.p_dport;
-	d->dns.req_dport = d->dns.p_sport;
-	d->dns.req_src = d->dns.p_dst;
-	d->dns.req_dst = d->dns.p_src;
 	d->dns.cname_ttl = -1;
 	d->dns.answer_ttl = -1;
 	d->dns.additional_dnssec_rr = 0;
@@ -693,19 +682,10 @@ void parse_DNS_answer(struct DNSdataControl *d)
 			d->ParsePcapCounter._unknown_ipaddress++;
 			return;
 		}
-
 	d->ParsePcapCounter._before_checking_dnsheader++;
-
-	memset(&cname, 0, sizeof cname);
-	d->dns._opcode = (d->dns.dns[2] & 0x78) >> 3;
 	if (d->dns._opcode != 0) return;
-	d->dns._rcode = d->dns.dns[3] & 0x0f;
-	d->dns.str_rcode = rcodestr[d->dns._rcode];
-	//if (d->dns._opcode != 0) return;
-	d->dns._rd = (d->dns.dns[2] & 1);
-	d->dns._cd = d->dns.dns[3] & 0x10;
-	d->dns._id = (d->dns.dns[0] << 8) | d->dns.dns[1];
 	if (d->dns.dns[4] != 0 && d->dns.dns[5] != 1) return;
+	memset(&cname, 0, sizeof cname);
 	memset(&d->dns.case_stats, 0, sizeof(d->dns.case_stats));
 	c = get_dname(&d->dns, d->dns.qname, sizeof(d->dns.qname), GET_DNAME_NO_COMP | GET_DNAME_SEPARATE, &d->dns.case_stats);
 	d->dns.qtype = get_uint16(&d->dns);
@@ -714,12 +694,20 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	//if (d->dns.qtype != 252 && (d->dns._rcode == 1 || d->dns._rcode == 5 || d->dns._rcode == 9)) return; /* FORMERR | REFUSED | NOTAUTH */
 	d->dns._edns0 = (d->dns.endp - d->dns.dns > 512 && d->dns._ip[9] == 17) ? 1 : 0;
 	anssec = d->dns.dns[7];
-	if (d->dns._rcode == 0 && anssec == 0) {
-		d->dns.str_rcode = rcodestr[16];
-		d->dns._rcode = -1;
-	}
 	authsec = d->dns.dns[9];
 	additional = d->dns.dns[11];
+	if (d->dns._tc != 0) {
+		d->dns.str_rcode = rcodestr[18]; // TC1
+	} else
+	if (d->dns._rcode == 0 && anssec == 0) {
+		if (authsec != 0 && d->dns._aa == 0) {
+			d->dns.str_rcode = rcodestr[17];
+			d->dns._rcode = 0;
+		} else {
+			d->dns.str_rcode = rcodestr[16];
+			d->dns._rcode = -1;
+		}
+	}
 	j = anssec + authsec + additional;
 	while (j > 0) {
 		p = d->dns.dns + d->dns.pointer;
@@ -814,8 +802,8 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	if (j != 0) {
 		d->dns.error |= ParsePcap_AnswerAnalysisError;
 	}
-	inet_ntop(d->dns.af, d->dns.req_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
-	inet_ntop(d->dns.af, d->dns.req_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
+	inet_ntop(d->dns.af, d->dns.p_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
+	inet_ntop(d->dns.af, d->dns.p_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
 	d->ParsePcapCounter._parsed_dnsquery++;
 
 	if (d->dns.n_ans_v4 > 0) {
@@ -901,7 +889,7 @@ void parse_DNS(struct DNSdataControl *d)
 	d->dns._flag2 = d->dns.dns[3];
 	d->dns._opcode = (d->dns.dns[2] & 0x78) >> 3;
 	d->dns._rcode = d->dns.dns[3] & 0x0f;
-	d->dns.str_rcode = "";
+	if (d->dns._qr != 0) d->dns.str_rcode = rcodestr[d->dns._rcode];
 	d->dns._aa = (d->dns.dns[2] & 4);
 	d->dns._tc = (d->dns.dns[2] & 2);
 	d->dns._rd = (d->dns.dns[2] & 1);
@@ -913,6 +901,12 @@ void parse_DNS(struct DNSdataControl *d)
 	d->dns._ancount = (d->dns.dns[6] << 8) | d->dns.dns[7];
 	d->dns._nscount = (d->dns.dns[8] << 8) | d->dns.dns[9];
 	d->dns._arcount = (d->dns.dns[10] << 8) | d->dns.dns[11];
+	if (d->mode & MODE_DO_ADDRESS_CHECK) {
+		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
+			d->ParsePcapCounter._unknown_ipaddress++;
+			return;
+		}
+	}
 	if (d->dns._qr != 0 && (d->mode & MODE_PARSE_ANSWER) != 0) {
 		parse_DNS_answer(d);
 	}
@@ -928,12 +922,6 @@ void parse_UDP(struct DNSdataControl *d)
 
 	d->dns.p_sport = d->dns.protoheader[0] * 256 + d->dns.protoheader[1];
 	d->dns.p_dport = d->dns.protoheader[2] * 256 + d->dns.protoheader[3];
-	if (d->mode & MODE_DO_ADDRESS_CHECK) {
-		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
-			d->ParsePcapCounter._unknown_ipaddress++;
-			return;
-		}
-	}
 	d->dns._udpsumoff = (*(u_short *)(d->dns.protoheader+6) == 0) ? 1 : 0;
 	if (*(u_short *)(d->dns.protoheader+6) != 0 && d->dns._transport_type != T_UDP_FRAG) {
 		if ((d->dns.iplen & 1) != 0 && (d->dns.iplen < 1600)) {
@@ -1453,6 +1441,7 @@ void parse_L3(struct DNSdataControl *d)
 	d->dns.endp = d->dns._ip + d->dns.len;
 	d->dns._fragSize = 0;
 	d->dns.partial = 0;
+	d->dns.ip_df = 0;
 
 	if (d->dns.version == 4) {
 		d->ParsePcapCounter._ipv4++;
@@ -1500,6 +1489,7 @@ void parse_L3(struct DNSdataControl *d)
 				return;
 			}
 		}
+		d->dns.ip_df = (d->dns._ip[6] & 0x40) ? 1 : 0;
 		ip_off = (d->dns._ip[6] * 256 + d->dns._ip[7]) & 0x3fff;
 		d->dns.portaddrlen = d->dns.alen+2;
 		memcpy(d->dns.portaddr+2, d->dns.p_src, d->dns.alen);
@@ -1780,6 +1770,7 @@ int parse_line(struct DNSdataControl* c)
 	struct tm tm;
 	int len, i, j, k;
 	struct types *tt;
+	u_char *str;
 	u_char ip_src[16];
 	u_char ip_dst[16];
 
@@ -1843,17 +1834,16 @@ int parse_line(struct DNSdataControl* c)
 		if (q == NULL) return err_addr;
 		memcpy(c->dns.s_src, p, q - p);
 		c->dns.s_src[q-p] = 0;
-		c->dns.p_src = c->dns.req_src = ip_src;
-		c->dns.p_dst = c->dns.req_dst = ip_dst;
-		if (inet_pton(AF_INET, (char *)c->dns.s_src, c->dns.p_src) == 1) {
+		if (inet_pton(AF_INET, (char *)c->dns.s_src, ip_src) == 1) {
 			c->dns.af = AF_INET;
 			c->dns.alen = 4;
 		} else
-		if (inet_pton(AF_INET6, (char *)c->dns.s_src, c->dns.p_src) == 1) {
+		if (inet_pton(AF_INET6, (char *)c->dns.s_src, ip_src) == 1) {
 			c->dns.af = AF_INET6;
 			c->dns.alen = 16;
 		} else
 			return err_addr;
+		c->dns.p_src = ip_src;
 		c->dns.p_sport = 0;
 		p = q + 1;
 		/* find lastest / / */
@@ -1931,40 +1921,79 @@ int parse_line(struct DNSdataControl* c)
 		p = r + 1;
 		memcpy(c->dns.s_src, p, q - p);
 		c->dns.s_src[q-p] = 0;
-		c->dns.p_src = c->dns.req_src = ip_src;
-		c->dns.p_dst = c->dns.req_dst = ip_dst;
 		r = (u_char *)strchr((char *)c->dns.s_src, '%');
 		if (r != NULL) *r = 0;
-		if (inet_pton(AF_INET, (char *)c->dns.s_src, c->dns.p_src) == 1) {
+		if (inet_pton(AF_INET, (char *)c->dns.s_src, ip_src) == 1) {
 			c->dns.af = AF_INET;
 			c->dns.alen = 4;
 		} else
-		if (inet_pton(AF_INET6, (char *)c->dns.s_src, c->dns.p_src) == 1) {
+		if (inet_pton(AF_INET6, (char *)c->dns.s_src, ip_src) == 1) {
 			c->dns.af = AF_INET6;
 			c->dns.alen = 16;
 		} else
 			return err_addr;
-
+		c->dns.p_src = ip_src;
 		p = q + 1;
 		k = strtol((char *)p, (char **)&q, 10);
 		if (k < 0 || k > 65535 || q == NULL || (*q != ':' && *q != ' ')) return err_port;
 		c->dns.p_sport = k;
-	
-		p = q + 1;
-		q = (u_char *)strrchr((char *)p, ':');
-		if (q == NULL) return err_qname;
-		if (q[1] == ' ') {
-			p = q + 2;
-		} else {
-			for (r=q-1; r>p && (r[-1]!=':' || r[0]!=' '); r--);
-			if (r <= p) return err_qname;
-			p = r + 1;
+		p = q;
+		while (*p == ' ') p++;
+/*
+30-Jan-2011 00:00:01.852 queries: info: client 10.10.10.11#2582: query: ns.dns.jp IN A -EDC (203.119.1.1)
+01-Jul-2013 00:00:01.395 queries: info: client 10.11.21.21#2210 (google.co.jp): query: google.co.jp IN DS -EDC (203.119.1.1)
+02-Nov-2020 17:50:06.220 queries: info: client @0x7ff2bd0a81a0 10.22.33.2#51012 (2001:db8:111:2:12:): view view-jp: query: 2001:db8:111:2:12: IN AAAA +E(0)T (203.119.1.1)
+02-Nov-2020 17:50:06.211 queries: info: client @0x7ff2bd0a81a0 10.22.33.2#51012 (2001:db8:111:3:122:): view view-jp: query: 2001:db8:111:3:122: IN A +E(0)T (203.119.1.1)
+*/
+		c->dns.qname[0] = 0;
+		len = 0;
+		if (*p == '(') {
+			p++;
+			str = "): ";
+#define USE_STRSTR 1
+#ifdef USE_STRSTR
+			q = (u_char *)strstr((char *)p, str);
+#else
+			q = p;
+			while (q != NULL) {
+				q = strchr(q, str[0]);
+				if (q == NULL) break;
+				if (strncmp(q+1, str+1, 2) == 0) break;
+				q++;
+			}
+#endif
+			if (q == NULL) return err_qname;
+			len = q-p;
+			memcpy(c->dns.qname, p, len);
+			c->dns.qname[len] = 0;
+			p = q + 3;
 		}
-		q = (u_char *)strchr((char *)p, ' ');
-		if (q == NULL) return err_qname;
-		memcpy(c->dns.qname, p, q-p);
-		c->dns.qname[q-p] = 0;
-		p = q+1;
+		str = "query: ";
+#ifdef USE_STRSTR
+		q = (u_char *)strstr((char *)p, str);
+#else
+		q = p;
+		while (q != NULL) {
+			q = strchr(q, str[0]);
+			if (q == NULL) break;
+			if (strncmp(q+1, str+1, 6) == 0) break;
+			q++;
+		}
+#endif
+		if (q != NULL) { p = q + 7; }
+
+		if (len != 0) {
+			if (strncmp((char *)p, (char *)c->dns.qname, len) != 0 || p[len] != ' ')
+				return err_qname;
+			p += len + 1;
+		} else {
+			q = (u_char *)strchr((char *)p, ' ');
+			if (q == NULL) return err_qname;
+			len = q - p;
+			memcpy(c->dns.qname, p, len);
+			c->dns.qname[len] = 0;
+			p += len + 1;
+		}
 		q = (u_char *)strchr((char *)p, ' ');
 		if (q == NULL) return err_class;
 		len = q-p;
@@ -2036,10 +2065,11 @@ int parse_line(struct DNSdataControl* c)
 			if (q != NULL) {
 				memcpy(c->dns.s_dst, p, q - p);
 				c->dns.s_dst[q-p] = 0;
-				if (inet_pton(c->dns.af, (char *)c->dns.s_dst, c->dns.p_dst) != 1) {
+				if (inet_pton(c->dns.af, (char *)c->dns.s_dst, ip_dst) != 1) {
 					fprintf(stderr, "Unparseable [%s] af=%d\n", c->dns.s_dst, c->dns.af);
 					return err_server;
 				}
+				c->dns.p_dst = ip_dst;
 			}
 		}
 	} // End of both BIND 8 and BIND 9
@@ -2063,15 +2093,7 @@ int parse_line(struct DNSdataControl* c)
 		}
 	}
 
-/*
-30-Jan-2011 00:00:01.852 queries: info: client 218.219.54.69#2582: query: ns.mednet.jp IN A -EDC (203.119.1.1)
-01-Jul-2013 00:00:01.395 queries: info: client 163.139.21.201#2210 (lifemile.jp): query: lifemile.jp IN DS -EDC (203.119.1.1)
-^(\d+)-\S+\s+(\S+)\s+\S+\s+\S+\s+\S+\s+(\S+)#(\d+)( \(\S+\))?:\s+\S+\s+(\S+)\s+\S+\s+(\S+)\s+(\S+)\s+/
-($_day, $_time, $addr, $port, $_name, $_type, $_flag) = ($1, $2, $3, $4, $6, $7, $8);
-*/
-
-	c->dns.p_dport = c->dns.req_dport = 53;
-	c->dns.req_sport = c->dns.p_sport;
+	c->dns.p_dport = 53;
 	c->ParsePcapCounter._dns_query++;
 
 	if (c->mode & MODE_DO_ADDRESS_CHECK)
@@ -2117,7 +2139,9 @@ int _parse_bind9log(FILE *fp, struct DNSdataControl *c)
 {
 	int line1 = 0;
 	int ret;
+	time_t tt1, tt2;
 
+	tt1 = time(NULL);
 	do {
 		c->lineno++;
 		line1++;
@@ -2128,7 +2152,9 @@ int _parse_bind9log(FILE *fp, struct DNSdataControl *c)
 			fprintf(stderr, "error%02d: %s", ret, c->raw);
 		}
 	} while(fgets((char *)c->raw, sizeof(c->raw), fp) != NULL);
-	fprintf(stderr, "Loaded %d/%d lines from %s\n", line1, c->lineno, c->filename);
+	tt2 = time(NULL) - tt1;
+	if (tt2 == 0) tt2 = 1;
+	fprintf(stderr, "Loaded %d/%d lines from %s, %d sec, %d lines/sec\n", line1, c->lineno, c->filename, tt2, line1/tt2);
 	fflush(stderr);
 	return 0;
 }
@@ -2306,10 +2332,6 @@ int parse_testdata(struct DNSdataControl* c)
 	c->dns.p_dst = c->dns.portaddr+c->dns.portaddrlen+2;
 	c->dns.p_sport = c->dns.portaddr[0]*256+c->dns.portaddr[1];
 	c->dns.p_dport = c->dns.portaddr[alen+2]*256+c->dns.portaddr[alen+3];
-	c->dns.req_src = c->dns.p_src;
-	c->dns.req_dst = c->dns.p_dst;
-	c->dns.req_sport = c->dns.p_sport;
-	c->dns.req_dport = c->dns.p_dport;
 	(void)(c->callback)(c, CALLBACK_ADDRESSCHECK);
 	(void)(c->callback)(c, CALLBACK_PARSED);
 	return 0;
@@ -2617,13 +2639,6 @@ int parse_pcap(char *file, struct DNSdataControl* c)
 	c->filename = file;
 	c->lineno = 0;
 	len = strlen(file);
-	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
-		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
-		if ((fp = popen(buff, "r")) == NULL)
-			return ParsePcap_ERROR_FILE_OPEN;
-		ret = _parse_pcap(fp, c);
-		close_status = pclose(fp);
-	} else
 	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
 		snprintf(buff, sizeof buff, "gzip -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
@@ -2633,6 +2648,18 @@ int parse_pcap(char *file, struct DNSdataControl* c)
 	} else
 	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
 		snprintf(buff, sizeof buff, "xz -cd %s", file);
+		if ((fp = popen(buff, "r")) == NULL)
+			return ParsePcap_ERROR_FILE_OPEN;
+		ret = _parse_pcap(fp, c);
+		close_status = pclose(fp);
+	} else if (len > 4 && strcmp(file+len-4, ".zst") == 0) {
+		snprintf(buff, sizeof buff, "zstd -cd %s", file);
+		if ((fp = popen(buff, "r")) == NULL)
+			return ParsePcap_ERROR_FILE_OPEN;
+		ret = _parse_pcap(fp, c);
+		close_status = pclose(fp);
+	} else if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
+		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c);

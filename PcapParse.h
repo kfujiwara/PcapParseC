@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.86 2021/06/10 01:51:26 fujiwara Exp $
+	$Id: PcapParse.h,v 1.88 2022/02/07 10:35:36 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -55,10 +55,6 @@ struct DNSdata
   u_short p_dport;
   u_char portaddr[54]; // srcport, srcaddr, dstport, dstaddr, srport, srcaddr // portaddrlen*3
   u_char portaddrlen;  // 2+alen
-  u_char *req_src;
-  u_char *req_dst;
-  u_short req_sport;
-  u_short req_dport;
   u_char *_ip;
   u_char *protoheader;
   int protolen;
@@ -74,6 +70,7 @@ struct DNSdata
   int tcp_dnscount;    // Number of queries in one TCP
   int len;
   int iplen;
+  int ip_df;
   int dns_offset;
   int pointer;
   int error;

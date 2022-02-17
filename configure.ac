@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.59])
-AC_INIT([PcapParseC],[0.4.1],[fujiwara@jprs.co.jp])
+AC_INIT([PcapParseC],[0.5.0],[fujiwara@jprs.co.jp])
 LT_INIT
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([])
