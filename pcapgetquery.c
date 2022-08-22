@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.142 2022/02/17 04:03:47 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.149 2022/07/20 05:48:28 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -130,6 +130,8 @@ int ignore_TC = 0;
 int ignore_noTC = 0;
 int ignore_RD = 0;
 int ignore_noRD = 0;
+int ignore_v4 = 0;
+int ignore_v6 = 0;
 int ignore_TCP = 0;
 int ignore_UDP = 0;
 int ignore_OPCODE0 = 0;
@@ -148,6 +150,8 @@ static struct ignore_options {
 	char *name;
 	int *variable;
 } ignore_options[] = {
+	{ "v4", &ignore_v4 },
+	{ "v6", &ignore_v6 },
 	{ "EDNS", &ignore_EDNS },
 	{ "noEDNS", &ignore_noEDNS },
 	{ "CD", &ignore_CD },
@@ -160,6 +164,8 @@ static struct ignore_options {
 	{ "noTC", &ignore_noTC },
 	{ "RD", &ignore_RD },
 	{ "noRD", &ignore_noRD },
+	{ "v4", &ignore_v4 },
+	{ "v6", &ignore_v6 },
 	{ "TCP", &ignore_TCP },
 	{ "UDP", &ignore_UDP },
 	{ "OPCODE0", &ignore_OPCODE0 },
@@ -502,8 +508,12 @@ int callback(struct DNSdataControl *d, int mode)
 			counter.counter += 1;
 		}
 	}
+	if (ignore_v4 && d->dns.alen == 4) return 0;
+	if (ignore_v6 && d->dns.alen == 16) return 0;
 	if (ignore_UDP && d->dns._transport_type < T_TCP) return 0;
 	if (ignore_TCP && d->dns._transport_type >= T_TCP) return 0;
+	if (ignore_v4 && d->dns.alen == 4) return 0;
+	if (ignore_v6 && d->dns.alen == 16) return 0;
 	if (ignore_EDNS && d->dns._edns0 != 0) return 0;
 	if (ignore_noEDNS && d->dns._edns0 == 0) return 0;
 	if (ignore_CD && d->dns._cd != 0) return 0;
@@ -605,7 +615,7 @@ int callback(struct DNSdataControl *d, int mode)
 			"%d,"		//  additionaldnssecrrs
 			"%d,%d,%d,"	// dnslen transport_type FragSize
 			"%d,"           // ip_df
-			"%d,%d,%d,%f,"	// tcp_dnscount tcp_fastopen
+			"%d,%d,%d,%d,"	// tcp_dnscount tcp_fastopen
 					// tcp_mss tcp_delay
 			"%d,%s,"        // soa_ttl soa_dom
 			"%d,%d,"	// ans_ttl cname_ttl
@@ -624,12 +634,12 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.ip_df,
 			d->dns.tcp_dnscount, d->dns.tcp_fastopen,
 			d->dns.tcp_mss,
-			(double)d->dns.tcp_delay/1000000.0,
+			d->dns.tcp_delay,
 			d->dns.soa_ttl,
-			(d->dns.soa_dom==NULL)?"":(d->dns.soa_dom),
+			d->dns.soa_dom,
 			d->dns.answer_ttl,
 			d->dns.cname_ttl,
-			(d->dns.cnamelist==NULL)?"":(d->dns.cnamelist));
+			d->dns.cnamelist);
 		for (i = 0; i < d->dns.n_ans_v4; i++) {
 			inet_ntop(AF_INET, d->dns.ans_v4[i], addrstr, sizeof(addrstr));
 			printf("%s/", addrstr);
@@ -933,8 +943,8 @@ void usage(int c)
 "-N file   Load qname list file and print packets whose qname matches\n"
 "-n qname  Sepficy qname: print packets whose qname matches\n"
 "-x XX,XX,XX : Exclude queries\n"
-"   XX: EDNS, noEDNS, DO, noDO, AD, noAD, RD, noRD,\n"
-"       TCP, UDP, OPCODE0, noOPCODE0,\n"
+"   XX: v4, v6, TCP, UDP, OPCODE0, noOPCODE0,\n"
+"       EDNS, noEDNS, DO, noDO, AD, noAD, RD, noRD,\n"
 "       TC, noTC, RCODE0, noRCODE0, ANCOUNT0, noANCOUNT0, noREF, REF (response)\n"
 "       QNAME (inverse -n/-N options)\n"
 "-p XX,XX,XX : Print DNS answer options\n"
@@ -1213,6 +1223,8 @@ int main(int argc, char *argv[])
 	c.callback = callback;
 	c.debug = debug;
 	c.mode = mode;
+	c.rawlen = 65536;
+	c.raw = my_malloc(c.rawlen);
 
 	if (argc > 0) {
 		while (*argv != NULL) {
@@ -1224,10 +1236,10 @@ int main(int argc, char *argv[])
 			}
 			if (debug & FLAG_SCANONLY) {
 				memset(&c.ParsePcapCounter, 0, sizeof(c.ParsePcapCounter));
-				ret = parse_pcap(p, &c);
+				ret = parse_pcap(p, &c, 0);
 				printf("%s,%lu,%lu,%d\n", p, c.ParsePcapCounter.first_ts, c.ParsePcapCounter.last_ts, ret);
 			} else {
-				ret = parse_pcap(p, &c);
+				ret = parse_pcap(p, &c, 0);
 				if (ret != ParsePcap_NoError) {
 					printf("#Error:%s:%s:errno=%d\n", parse_pcap_error(ret), p, errno);
 					if (flag_ignore_error == 0) {
@@ -1248,7 +1260,7 @@ int main(int argc, char *argv[])
 			p = strchr(buff2, ',');
 			if (p != NULL) { *p = 0; }
 printf("Loading %s\n", buff2);
-			ret = parse_pcap(buff2, &c);
+			ret = parse_pcap(buff2, &c, 0);
 			if (ret != ParsePcap_NoError) {
 				printf("#Error:%s:%s:errno=%d\n", parse_pcap_error(ret), buff2, errno);
 				if (flag_ignore_error == 0) {
@@ -1270,7 +1282,7 @@ printf("Loading %s\n", buff2);
 		}
 	}
 	//dump_tcpbuff();
-	tcpbuff_statistics();
+	//tcpbuff_statistics();
 
 	return 0;
 }

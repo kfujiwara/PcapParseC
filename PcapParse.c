@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.196 2022/02/10 10:03:39 fujiwara Exp $
+	$Id: PcapParse.c,v 1.210 2022/08/05 07:10:18 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -97,6 +97,12 @@
 #endif
 #ifdef HAVE_ERR_H
 #include <err.h>
+#endif
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#endif
+#ifdef HAVE_SYS_RESOURCE_H
+#include <sys/resource.h>
 #endif
 
 #include "ext/uthash.h"
@@ -214,15 +220,15 @@ int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s)
 #define GET_DNAME_NO_SAVE 2
 #define	GET_DNAME_SEPARATE 4
 #define	GET_DNAME_BIND9LOG 8
-int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, struct case_stats *s)
+int get_dname(struct DNSdata *d, char *o, int o_len, int mode, struct case_stats *s)
 {
 	unsigned char *p;
 	int olen = 0;
 	int count;
-	u_char *op = o;
+	u_char *op = (u_char *)o;
 	int newp = 0;
 	int nlabel = 0;
-	u_char *wp = d->qnamebuf;
+	u_char *wp = (u_char *)d->qnamebuf;
 	int i, j;
 	int prev_compress = 65536;
 
@@ -236,7 +242,7 @@ int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, struct case_sta
 	while (p < d->endp) {
 		if (*p == 0) {
 			if (olen + 2 > o_len) return -1;
-			if (op == o) {
+			if (op == (u_char *)o) {
 				*op++ = '.';
 				olen++;
 			}
@@ -246,9 +252,9 @@ int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, struct case_sta
 				d->nlabel = nlabel;
 				/* swap order */
 				for (i = 0, j = nlabel - 1; i < j; i++, j--) {
-					wp = d->label[i];
+					wp = (u_char *)d->label[i];
 					d->label[i] = d->label[j];
-					d->label[j] = wp;
+					d->label[j] = (char *)wp;
 				}
 			}
 			return olen;
@@ -265,7 +271,7 @@ int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, struct case_sta
 		} else {
 			if (p + *p + 1 >= d->endp) return -1;
 			if (olen + *p + 1 > o_len) return -1;
-			if (op != o) {
+			if (op != (u_char *)o) {
 				*op++ = '.';
 				olen++;
 			}
@@ -281,7 +287,7 @@ int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, struct case_sta
 			if (mode & GET_DNAME_SEPARATE) {
 				if (nlabel >= PcapParse_LABELS)
 					return -1;
-				d->label[nlabel++] = wp;
+				d->label[nlabel++] = (char *)wp;
 				labelcopy(wp, p+1, *p, NULL);
 				wp[*p] = 0;
 				wp += *p + 1;
@@ -482,7 +488,7 @@ void print_dns_answer(struct DNSdataControl *d)
 {
 	u_char *p, *q;
 	u_short *r;
-	u_char rr_name[257], rr_rdata_name[257];
+	char rr_name[257], rr_rdata_name[257];
 	int i;
 	int rr_type, rr_class, rr_ttl, rr_rdlength;
 	int anssec, authsec, additional;
@@ -606,8 +612,8 @@ void print_dns_answer(struct DNSdataControl *d)
 
 struct cname_list
 {
-	u_char owner[PcapParse_DNAMELEN];
-	u_char target[PcapParse_DNAMELEN];
+	char owner[PcapParse_DNAMELEN];
+	char target[PcapParse_DNAMELEN];
 	int ttl;
 	int used;
 };
@@ -649,15 +655,15 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	int c;
 	u_char *p;
 	int i, j, l, m, n, ttl, anssec, authsec, additional;
-	u_char buff[PcapParse_DNAMELEN];
-	u_char buff2[PcapParse_DNAMELEN];
-	u_char qtype_name[PcapParse_DNAMELEN] = "";
+	char buff[PcapParse_DNAMELEN];
+	char buff2[PcapParse_DNAMELEN];
+	char qtype_name[PcapParse_DNAMELEN] = "";
 	int qtype_ttl = -1;
 	int answer_ttl = -1;
 	struct cname_list cname[NUM_CNAME];
 	int ncname = 0;
 	int cnamettl = -1;
-	u_char *current;
+	char *current;
 	int found;
 
 	d->ParsePcapCounter._dns_response++;
@@ -749,8 +755,8 @@ void parse_DNS_answer(struct DNSdataControl *d)
 					i = get_dname(&d->dns, buff2, sizeof(buff2), GET_DNAME_NO_SAVE, NULL);
 					if (i < 0) break;
 					if (ncname < NUM_CNAME) {
-						strcpy((char *)cname[ncname].owner, (char *)buff);
-						strcpy((char *)cname[ncname].target, (char *)buff2);
+						strcpy(cname[ncname].owner, buff);
+						strcpy(cname[ncname].target, buff2);
 						cname[ncname].ttl = ttl;
 						ncname++;
 					}
@@ -823,13 +829,13 @@ void parse_DNS_answer(struct DNSdataControl *d)
 			do {
 				found = 0;
 				for (i = 0; i < ncname; i++) {
-					if (cname[i].used == 0 && strcasecmp((char *)cname[i].owner, (char *)current)==0) {
+					if (cname[i].used == 0 && strcasecmp((char *)cname[i].owner, current)==0) {
 						found = 1;
 						cname[i].used = 1;
 						current = cname[i].target;
 						if (cnamettl < 0 || cnamettl > cname[i].ttl)
 							cnamettl = cname[i].ttl;
-						l = strlen((char *)current);
+						l = strlen(current);
 						if (l+2 < pprest) {
 							memcpy(pp, current, l);
 							pp += l;
@@ -850,7 +856,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 			}
 			d->dns.cname_ttl = cnamettl;
 			if (qtype_name[0] != 0) {
-				if (strcmp((char *)qtype_name, (char *)current) != 0) {
+				if (strcmp(qtype_name, current) != 0) {
 					d->dns.error |= ParsePcap_CnameError;
 				} else {
 					d->dns.answer_ttl = qtype_ttl;
@@ -884,7 +890,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 void parse_DNS(struct DNSdataControl *d)
 {
 	d->dns.pointer = 12;
-	d->dns._qr = (d->dns.dns[2] & 0x80) != 0;
+	d->dns._qr = (d->dns.dns[2] & 0x80) != 0 ? 1 : 0;
 	d->dns._flag1 = d->dns.dns[2];
 	d->dns._flag2 = d->dns.dns[3];
 	d->dns._opcode = (d->dns.dns[2] & 0x78) >> 3;
@@ -1026,7 +1032,7 @@ void parse_TCP_data(struct DNSdataControl *d, int datalen, struct TCPbuff *t, in
 			if (d->dns.tcp_mss == 0) d->dns.tcp_mss = t->tcp_mss;
 			if (d->dns.tcp_fastopen == 0) d->dns.tcp_fastopen = t->tcp_fastopen;
 			d->dns.tcp_delay = t->tcp_delay;
-			t->tcp_delay = -1000000;
+			t->tcp_delay = -1;
 			d->dns.dnslen = j;
 			d->dns.dns = t->buff + 2;
 			d->dns.endp = d->dns.dns + j;
@@ -1075,7 +1081,7 @@ void parse_nosyn_data(struct DNSdataControl *d, int len)
 		if (d->debug & FLAG_DEBUG_TCP) hexdump("#INFO_TCP:do parse_nosyn_data:partial_strangeData_ignored\n", d->dns._ip, d->dns.iplen);
 	} else
 	if (j <= len - 2) {
-		d->dns.tcp_delay = -1000000;
+		d->dns.tcp_delay = -1;
 		d->dns.dnslen = j;
 		d->dns.dns += 2;
 		d->dns.endp = d->dns.dns + j;
@@ -1087,7 +1093,7 @@ void parse_nosyn_data(struct DNSdataControl *d, int len)
 			hexdump("#INFO_TCP:T_TCP_PARTIAL:do parse_DNS", p+2, len-2);
 		d->dns.dnslen = len - 2;
 		d->dns.dns += 2;
-		d->dns.tcp_delay = -1000000;
+		d->dns.tcp_delay = -1;
 		parse_DNS(d);
 	} else {
 		//printf("#INFO_TCP:NO_SYN_:partial_strangeData_ignored:datalen=%d:p=%d\n", len, j);
@@ -1278,6 +1284,8 @@ void parse_TCP(struct DNSdataControl *d)
 	if (syn) {
 		// Parse TCP_Options
 		d->ParsePcapCounter._tcpbuff_syn++;
+		d->dns.tcp_mss = 0;
+		d->dns.tcp_fastopen = 0;
 		p = d->dns.protoheader;
 		i = 20;
 		while(i+1 < data_offset && p[i] != 0) {
@@ -1339,14 +1347,14 @@ void parse_TCP(struct DNSdataControl *d)
 	if (d->debug & FLAG_DEBUG_256) {
 		if (found->ts_syn != 0 && found->tcp_delay == 0) {
 			found->tcp_delay = d->dns.ts - found->ts_syn;
-			if (found->tcp_delay == 0) found->tcp_delay = 1;
+			if (found->tcp_delay <= 0) found->tcp_delay = -1;
 		}
 	} else
 	if (datalen > 0 && found->ts_first_data == 0) {
 		found->ts_first_data = d->dns.ts;
 		if (found->ts_syn != 0 && found->tcp_delay == 0) {
 			found->tcp_delay = d->dns.ts - found->ts_syn;
-			if (found->tcp_delay == 0) found->tcp_delay = 1;
+			if (found->tcp_delay <= 0) found->tcp_delay = -1;
 		}
 	}
 	if (datalen > 0 && datalen <= found->datalen) {
@@ -1737,7 +1745,7 @@ int parse_uint16(u_char *str, int len)
 }
 #endif
 
-int parse_decimal2(u_char *x)
+int parse_decimal2(char *x)
 {
 	if (x[0]<'0' || x[0]>'9' || x[1]<'0' || x[1]>'9') {
 		return -1;
@@ -1745,7 +1753,7 @@ int parse_decimal2(u_char *x)
 	return (x[0]-'0')*10+x[1]-'0';
 }
 
-int parse_decimal3(u_char *x)
+int parse_decimal3(char *x)
 {
 	if (x[0]<'0' || x[0]>'9' || x[1]<'0' || x[1]>'9' || x[2]<'0' || x[2]>'9') {
 		return -1;
@@ -1753,7 +1761,7 @@ int parse_decimal3(u_char *x)
 	return (x[0]-'0')*100+(x[1]-'0')*10+x[2]-'0';
 }
 
-int parse_decimal4(u_char *x)
+int parse_decimal4(char *x)
 {
 	if (x[0]<'0' || x[0]>'9' || x[1]<'0' || x[1]>'9' || x[2]<'0' || x[2]>'9' || x[3]<'0' || x[3]>'9') {
 		return -1;
@@ -1763,18 +1771,18 @@ int parse_decimal4(u_char *x)
 
 int parse_line(struct DNSdataControl* c)
 {
-	u_char *p, *q, *r;
-	u_char *_type = NULL, *_class = NULL;
+	char *p, *q, *r;
+	char *_type = NULL, *_class = NULL;
 	int _typelen = 0, _classlen = 0;
 	int msec;
 	struct tm tm;
 	int len, i, j, k;
 	struct types *tt;
-	u_char *str;
+	char *str;
 	u_char ip_src[16];
 	u_char ip_dst[16];
 
-	p = c->raw;
+	p = (char *)c->raw;
 	memset(&tm, 0, sizeof(tm));
 	tm.tm_mday = parse_decimal2(p);
 	if (tm.tm_mday < 0 || tm.tm_mday > 31 || p[2] != '-') return err_date;
@@ -1825,12 +1833,12 @@ int parse_line(struct DNSdataControl* c)
 		return 0;
 	}
 	// Test BIND 8 style ?
-	q = (u_char *)strchr((char *)p, 'X');
+	q = strchr(p, 'X');
 	if (q != NULL && q[0] == 'X' && q[1] == 'X' && q[2] != 0 && q[3] == '/') {
 		// BIND 8 mode
 		c->dns._rd = (q[2] == '+') ? 1 : 0;
 		p = q + 4;
-		q = (u_char *)strchr((char *)p, '/');
+		q = strchr(p, '/');
 		if (q == NULL) return err_addr;
 		memcpy(c->dns.s_src, p, q - p);
 		c->dns.s_src[q-p] = 0;
@@ -1914,27 +1922,27 @@ int parse_line(struct DNSdataControl* c)
 		c->dns._qr = 0;
 	} else {
 	// BIND 9 mode
-		q = (u_char *)strchr((char *)p, '#');
+		q = strchr(p, '#');
 		if (q == NULL) return err_addr;
 		for (r = q - 1; r >= p && *r != ' ' && *r != 0; r--);
 		if (*r != ' ') return err_addr;
 		p = r + 1;
 		memcpy(c->dns.s_src, p, q - p);
 		c->dns.s_src[q-p] = 0;
-		r = (u_char *)strchr((char *)c->dns.s_src, '%');
+		r = strchr(c->dns.s_src, '%');
 		if (r != NULL) *r = 0;
-		if (inet_pton(AF_INET, (char *)c->dns.s_src, ip_src) == 1) {
+		if (inet_pton(AF_INET, c->dns.s_src, ip_src) == 1) {
 			c->dns.af = AF_INET;
 			c->dns.alen = 4;
 		} else
-		if (inet_pton(AF_INET6, (char *)c->dns.s_src, ip_src) == 1) {
+		if (inet_pton(AF_INET6, c->dns.s_src, ip_src) == 1) {
 			c->dns.af = AF_INET6;
 			c->dns.alen = 16;
 		} else
 			return err_addr;
 		c->dns.p_src = ip_src;
 		p = q + 1;
-		k = strtol((char *)p, (char **)&q, 10);
+		k = strtol(p, &q, 10);
 		if (k < 0 || k > 65535 || q == NULL || (*q != ':' && *q != ' ')) return err_port;
 		c->dns.p_sport = k;
 		p = q;
@@ -1952,7 +1960,7 @@ int parse_line(struct DNSdataControl* c)
 			str = "): ";
 #define USE_STRSTR 1
 #ifdef USE_STRSTR
-			q = (u_char *)strstr((char *)p, str);
+			q = strstr(p, str);
 #else
 			q = p;
 			while (q != NULL) {
@@ -1970,7 +1978,7 @@ int parse_line(struct DNSdataControl* c)
 		}
 		str = "query: ";
 #ifdef USE_STRSTR
-		q = (u_char *)strstr((char *)p, str);
+		q = strstr(p, str);
 #else
 		q = p;
 		while (q != NULL) {
@@ -1987,57 +1995,57 @@ int parse_line(struct DNSdataControl* c)
 				return err_qname;
 			p += len + 1;
 		} else {
-			q = (u_char *)strchr((char *)p, ' ');
+			q = strchr(p, ' ');
 			if (q == NULL) return err_qname;
 			len = q - p;
 			memcpy(c->dns.qname, p, len);
 			c->dns.qname[len] = 0;
 			p += len + 1;
 		}
-		q = (u_char *)strchr((char *)p, ' ');
+		q = strchr(p, ' ');
 		if (q == NULL) return err_class;
 		len = q-p;
-		if (strncasecmp((char *)p, "IN", len) == 0) {
+		if (strncasecmp(p, "IN", len) == 0) {
 			c->dns.qclass = 1;
 		} else
-		if (strncasecmp((char *)p, "CH", len) == 0) {
+		if (strncasecmp(p, "CH", len) == 0) {
 			c->dns.qclass = 3;
 		} else
-		if (strncasecmp((char *)p, "HS", len) == 0) {
+		if (strncasecmp(p, "HS", len) == 0) {
 			c->dns.qclass = 4;
 		} else
-		if (strncasecmp((char *)p, "ANY", len) == 0) {
+		if (strncasecmp(p, "ANY", len) == 0) {
 			c->dns.qclass = 255;
 		} else
-		if (strncasecmp((char *)p, "CLASS", 5) == 0) {
-			k = strtol((char *)p + 5, NULL, 10);
+		if (strncasecmp(p, "CLASS", 5) == 0) {
+			k = strtol(p + 5, NULL, 10);
 			if (k < 0 || k > 65535) return err_class;
 			c->dns.qclass = k;
 		} else
 			return err_class;
 	
 		p = q + 1;
-		q = (u_char *)strchr((char *)p, ' ');
+		q = strchr(p, ' ');
 		if (q == NULL) return err_type;
 		len = q-p;
 		k = -1;
 		for (tt = types; tt->name != NULL; tt++) {
-			if (strncasecmp((char *)p, tt->name, len) == 0) {
+			if (strncasecmp(p, tt->name, len) == 0) {
 				k = tt->code;
 				break;
 			}
 		}
 		if (k == -1) {
-			if (strncasecmp((char *)p, "TYPE", 4) == 0)
-				k = strtol((char *)p + 4, NULL, 10);
+			if (strncasecmp(p, "TYPE", 4) == 0)
+				k = strtol(p + 4, NULL, 10);
 		}
 		if (k < 0 || k > 65535) return err_type;
 		c->dns.qtype = k;
 	
 		p = q + 1;
-		q = (u_char *)strchr((char *)p, ' ');
+		q = strchr(p, ' ');
 		if (q == NULL) {
-			len = strlen((char *)p);
+			len = strlen(p);
 			if (len == 0 || len > 4)
 				return err_flag;
 			q = p + len;
@@ -2061,7 +2069,7 @@ int parse_line(struct DNSdataControl* c)
 	
 		if (*p == '(') {
 			p++;
-			q = (u_char *)strchr((char *)p, ')');
+			q = strchr(p, ')');
 			if (q != NULL) {
 				memcpy(c->dns.s_dst, p, q - p);
 				c->dns.s_dst[q-p] = 0;
@@ -2113,7 +2121,7 @@ int parse_line(struct DNSdataControl* c)
 	i = 0;
 	while (p != NULL && i < PcapParse_LABELS) {
 		c->dns.label[i] = p;
-		q = (u_char *)strchr((char *)p, '.');
+		q = strchr(p, '.');
 		if (q != NULL) {
 			*q = 0;
 			p = q+1;
@@ -2151,10 +2159,10 @@ int _parse_bind9log(FILE *fp, struct DNSdataControl *c)
 			c->ParsePcapCounter.error[ret]++;
 			fprintf(stderr, "error%02d: %s", ret, c->raw);
 		}
-	} while(fgets((char *)c->raw, sizeof(c->raw), fp) != NULL);
+	} while(fgets((char *)c->raw, c->rawlen, fp) != NULL);
 	tt2 = time(NULL) - tt1;
 	if (tt2 == 0) tt2 = 1;
-	fprintf(stderr, "Loaded %d/%d lines from %s, %d sec, %d lines/sec\n", line1, c->lineno, c->filename, tt2, line1/tt2);
+	fprintf(stderr, "Loaded %d/%d lines from %s, %ld sec, %ld lines/sec\n", line1, c->lineno, c->filename, tt2, line1/tt2);
 	fflush(stderr);
 	return 0;
 }
@@ -2211,6 +2219,7 @@ int parse_testdata(struct DNSdataControl* c)
 	double tt;
 	int i, j, alen = 0, qclass;
 
+	c->input_type = INPUT_TYPE_TEST;
 	p = (char *)c->raw;
 	memset(&c->dns, 0, sizeof(c->dns));
 
@@ -2280,7 +2289,7 @@ int parse_testdata(struct DNSdataControl* c)
 			p = (char *)c->dns.qnamebuf;
 			i = 0;
 			while (p != NULL && i < PcapParse_LABELS) {
-				c->dns.label[i] = (u_char *)p;
+				c->dns.label[i] = p;
 				q = strchr(p, '.');
 				if (q != NULL) {
 					*q = 0;
@@ -2294,9 +2303,9 @@ int parse_testdata(struct DNSdataControl* c)
 			c->dns.nlabel = i;
 			/* swap order */
 			for (i = 0, j = c->dns.nlabel - 1; i < j; i++, j--) {
-				p = (char *)c->dns.label[i];
+				p = c->dns.label[i];
 				c->dns.label[i] = c->dns.label[j];
-				c->dns.label[j] = (u_char *)p;
+				c->dns.label[j] = p;
 			}
 		} else if (strcmp((char *)p, "node") == 0) {
 			c->nodeid = add_node_name(c, q);
@@ -2351,7 +2360,7 @@ int _parse_testdata(FILE *fp, struct DNSdataControl *c)
 			c->ParsePcapCounter.error[ret]++;
 			fprintf(stderr, "error%02d: %s", ret, c->raw);
 		}
-	} while(fgets((char *)c->raw, sizeof(c->raw), fp) != NULL);
+	} while(fgets((char *)c->raw, c->rawlen, fp) != NULL);
 	fprintf(stderr, "Loaded %d/%d lines from %s\n", line1, c->lineno, c->filename);
 	fflush(stderr);
 	return 0;
@@ -2464,7 +2473,7 @@ int parse_l2(struct pcap_header *ph, struct DNSdataControl* c)
 
 static char testdatahead[] = TESTDATA_HEAD;
 
-int _parse_pcap(FILE *fp, struct DNSdataControl* c)
+int _parse_pcap(FILE *fp, struct DNSdataControl* c, int pass)
 {
 	struct pcap_header ph;
 	struct pcap_file_header pf;
@@ -2503,6 +2512,8 @@ int _parse_pcap(FILE *fp, struct DNSdataControl* c)
 	case 0xd4c3b2a1: // pcap mode big endian
 		needswap = 1;
 	case 0xa1b2c3d4: // pcap mode
+		if (pass != 0) return 0;
+		c->input_type = INPUT_TYPE_PCAP;
 		p = (u_char *)&pf;
 		p += PCAP_FIRST_READ;
 		plen = sizeof(pf) - PCAP_FIRST_READ;
@@ -2564,6 +2575,8 @@ int _parse_pcap(FILE *fp, struct DNSdataControl* c)
 				(len == sizeof ph) ? "Packet data":"Pcap header");
 		return ParsePcap_ERROR_ShortRead;
 	case 0x0a0d0d0a: // pcapng mode
+		if (pass != 0) return 0;
+		c->input_type = INPUT_TYPE_PCAP;
 		png3p = (struct pcapng_section_header3 *)(&pf);
 		//printf("magic=%lx length=%lx\n", png3p->magic, png3p->length);
 		if (png3p->magic == 0x1a2b3c4d) {
@@ -2610,23 +2623,25 @@ int _parse_pcap(FILE *fp, struct DNSdataControl* c)
 		}
 		return 0;
 	default: // Query Log mode
+		c->input_type = INPUT_TYPE_QUERYLOG;
 		memcpy(c->raw, &pf.magic, len);
-		if (fgets((char *)(c->raw + len), sizeof(c->raw) - len, fp) == NULL) {
+		if (fgets((char *)(c->raw + len), c->rawlen - len, fp) == NULL) {
 			return ParsePcap_ERROR_BogusSavefile;
 		}
 		if (memcmp(c->raw, testdatahead, sizeof(testdatahead)-1) == 0) {
-			_parse_testdata(fp, c);
+			if (pass == 0) _parse_testdata(fp, c);
 		} else if (isdigit(c->raw[0]))
 			_parse_bind9log(fp, c);
 		else
 		if (c->otherdata != NULL) {
-			return c->otherdata(fp, c);
+			c->input_type = INPUT_TYPE_OTHERDATA;
+			return c->otherdata(fp, c, pass);
 		}
 		return 0;
 	}
 }
 
-int parse_pcap(char *file, struct DNSdataControl* c)
+int parse_pcap(char *file, struct DNSdataControl* c, int pass)
 {
 	int ret;
 	FILE *fp;
@@ -2634,8 +2649,9 @@ int parse_pcap(char *file, struct DNSdataControl* c)
 	int close_status = 0;
 	char buff[256];
 
+	c->input_type = INPUT_TYPE_NONE;
 	if (file == NULL)
-		return _parse_pcap(stdin, c);
+		return _parse_pcap(stdin, c, pass);
 	c->filename = file;
 	c->lineno = 0;
 	len = strlen(file);
@@ -2643,35 +2659,35 @@ int parse_pcap(char *file, struct DNSdataControl* c)
 		snprintf(buff, sizeof buff, "gzip -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
-		ret = _parse_pcap(fp, c);
+		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
 		snprintf(buff, sizeof buff, "xz -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
-		ret = _parse_pcap(fp, c);
+		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
 	} else if (len > 4 && strcmp(file+len-4, ".zst") == 0) {
 		snprintf(buff, sizeof buff, "zstd -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
-		ret = _parse_pcap(fp, c);
+		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
 	} else if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
 		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
-		ret = _parse_pcap(fp, c);
+		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
 	} else {
 		if ((fp = fopen(file, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
-		ret = _parse_pcap(fp, c);
+		ret = _parse_pcap(fp, c, pass);
 		close_status = fclose(fp);
 	}
 	if (ret == 0 && close_status > 0) {
-		fprintf(stderr, "fclose_returned:%d/%d:%s\n", close_status, ret, file);
+		fprintf(stderr, "fclose_returned:%d/%d:%s errno=%d\n", close_status, ret, file, errno);
 		return ParsePcap_ERROR_COMMAND;
 	}
 	return ret;
@@ -2777,4 +2793,30 @@ char *get_node_name(struct DNSdataControl *d, int node_id)
 {
 	if (node_id < 0 || node_id >= d->num_node_name) return NULL;
 	return d->node_name[node_id]->node;
+}
+
+void print_rusage()
+{
+	struct rusage usage;
+	int r;
+
+#define	PRINT_TV(X, Y) printf("#rusage:" #Y ",%ld.%06d\n", X.Y.tv_sec, X.Y.tv_usec)
+#define	PRINT_XX(X, Y) printf("#rusage:" #Y ",%ld\n", X.Y)
+	r = getrusage(RUSAGE_SELF, &usage);
+	PRINT_TV(usage, ru_utime);
+	PRINT_TV(usage, ru_stime);
+	PRINT_XX(usage, ru_maxrss);
+	//PRINT_XX(usage, ru_ixrss);
+	//PRINT_XX(usage, ru_idrss);
+	//PRINT_XX(usage, ru_isrss);
+	//PRINT_XX(usage, ru_minflt);
+	//PRINT_XX(usage, ru_majflt);
+	//PRINT_XX(usage, ru_nswap);
+	//PRINT_XX(usage, ru_inblock);
+	//PRINT_XX(usage, ru_oublock);
+	//PRINT_XX(usage, ru_msgsnd);
+	//PRINT_XX(usage, ru_msgrcv);
+	//PRINT_XX(usage, ru_nsignals);
+	//PRINT_XX(usage, ru_nvcsw);
+	//PRINT_XX(usage, ru_nivcsw);
 }

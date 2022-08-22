@@ -1,5 +1,5 @@
 /*
-	$Id: PcapSelectDNS.c,v 1.11 2021/04/15 11:49:20 fujiwara Exp $
+	$Id: PcapSelectDNS.c,v 1.12 2022/07/20 05:48:28 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -235,7 +235,7 @@ int main(int argc, char *argv[])
 	while (*argv != NULL) {
 		if (argc > 1) fprintf(stderr, "Loading %s\n", *argv);
 		// fflush(stderr);
-		ret = parse_pcap(*argv, &c);
+		ret = parse_pcap(*argv, &c, 0);
 		if (ret != ParsePcap_NoError) {
 			printf("#Error:%s:%s\n", parse_pcap_error(ret), *argv);
 		}

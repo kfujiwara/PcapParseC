@@ -13,7 +13,7 @@ AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 
 # Checks for header files.
-AC_CHECK_HEADERS([arpa/inet.h time.h fcntl.h netinet/in.h stdlib.h sys/socket.h unistd.h string.h stdarg.h errno.h ctype.h apr.h math.h string.h err.h sys/endian.h math.h maxminddb.h apr_hash.h sys/stat.h maxminddb.h assert.h])
+AC_CHECK_HEADERS([arpa/inet.h time.h fcntl.h netinet/in.h stdlib.h sys/socket.h unistd.h string.h stdarg.h errno.h ctype.h apr.h math.h string.h err.h sys/endian.h math.h maxminddb.h apr_hash.h sys/stat.h maxminddb.h assert.h sys/resource.h])
 
 AC_CHECK_PROG(fetch, wget)
 AC_CHECK_LIB(maxminddb,MMDB_open)

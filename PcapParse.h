@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.88 2022/02/07 10:35:36 fujiwara Exp $
+	$Id: PcapParse.h,v 1.93 2022/07/23 17:59:31 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -64,8 +64,8 @@ struct DNSdata
   u_char partial;
   u_char proto;
   u_char _transport_type; /* T_UDP, T_UDP_FRAG, T_TCP, T_TCP_FRAG */
-  int64_t tcp_delay; // Round Trip Time from TCP  ... data - SYN (must > 0)
   u_char tcp_fastopen; // FastOpen
+  int64_t tcp_delay; // Round Trip Time from TCP  ... data - SYN (must > 0)
   int tcp_mss;         // MSS value
   int tcp_dnscount;    // Number of queries in one TCP
   int len;
@@ -77,12 +77,12 @@ struct DNSdata
   u_int32_t tv_sec;
   u_int32_t tv_usec;
   int64_t ts;
-  u_char s_src[INET6_ADDRSTRLEN];
-  u_char s_dst[INET6_ADDRSTRLEN];
-  u_char qname[PcapParse_DNAMELEN];
+  char s_src[INET6_ADDRSTRLEN];
+  char s_dst[INET6_ADDRSTRLEN];
+  char qname[PcapParse_DNAMELEN];
   struct case_stats case_stats;
-  u_char qnamebuf[PcapParse_DNAMELEN];
-  u_char *label[PcapParse_LABELS];
+  char qnamebuf[PcapParse_DNAMELEN];
+  char *label[PcapParse_LABELS];
   int nlabel;
   int qtype;
   int qclass;
@@ -214,11 +214,12 @@ struct node_hash {
 
 struct DNSdataControl {
   int (*callback)(struct DNSdataControl*, int);
-  int (*otherdata)(FILE *fp, struct DNSdataControl*);
+  int (*otherdata)(FILE *fp, struct DNSdataControl*d, int pass);
   struct node_hash *node_hash;
   struct node_hash **node_name;
   int num_node_name;
   int max_node_name;
+  int input_type;
   char *filename;
   char letter;
   char node[9];
@@ -231,12 +232,13 @@ struct DNSdataControl {
   int linktype;
   int caplen;
   int lineno;
-  u_char raw[65536];
+  u_char *raw;
+  int rawlen;
   u_char *l2;
 };
 
-int parse_pcap(char *file, struct DNSdataControl*);
-int _parse_pcap(FILE *fp, struct DNSdataControl* c);
+int parse_pcap(char *file, struct DNSdataControl*d, int pass);
+int _parse_pcap(FILE *fp, struct DNSdataControl* d, int pass);
 int add_node_name(struct DNSdataControl *d, char *node);
 char *get_node_name(struct DNSdataControl *d, int nodeid);
 char *parse_pcap_error(int errorcode);
@@ -246,12 +248,18 @@ void tcpbuff_statistics();
 
 unsigned int get_uint16(struct DNSdata *d);
 unsigned long long int get_uint32(struct DNSdata *d);
-int get_dname(struct DNSdata *d, u_char *o, int o_len, int mode, struct case_stats *s);
+int get_dname(struct DNSdata *d, char *o, int o_len, int mode, struct case_stats *s);
 void hexdump(char *msg, u_char *data, int len);
 void Print_PcapStatistics(struct DNSdataControl *d);
 
 #define GET_DNAME_NO_COMP 1
 #define GET_DNAME_NO_SAVE 2
+
+#define INPUT_TYPE_NONE 0
+#define INPUT_TYPE_PCAP 1
+#define INPUT_TYPE_QUERYLOG 2
+#define INPUT_TYPE_TEST 3
+#define INPUT_TYPE_OTHERDATA 4
 
 #define MODE_PARSE_QUERY	1
 #define MODE_PARSE_ANSWER	2
@@ -316,4 +324,6 @@ T_UDP = 1, T_UDP_FRAG = 2, T_TCP = 3, T_TCP_FRAG = 4, T_TCP_PARTIAL = 5,
 #define	TESTDATA_HEAD "#TESTDATA"
 
 extern int tcpbuff_max;
+
+void print_rusage(void);
 
