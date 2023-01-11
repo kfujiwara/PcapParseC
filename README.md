@@ -15,11 +15,8 @@ There is no documentation which describes how to use it as a library.
 pcapDNSKEY.c and pcapgetquery.c are examples for PcapParse.c.
 
 How to build:
-	(libtoolize; automake --add-missing)
-	autoreconf
-	./configure
-	make
-	make install
+
+	autoreconf -i; ./configure; make; make install
 
 Tested environment:
 	FreeBSD 8.3
