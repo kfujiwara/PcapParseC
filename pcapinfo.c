@@ -1,5 +1,5 @@
 /*
-	$Id: pcapinfo.c,v 1.7 2019/12/12 11:17:03 fujiwara Exp $
+	$Id: pcapinfo.c,v 1.10 2021/04/15 11:49:20 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -97,11 +97,9 @@ void hexdump(char *msg, u_char *data, int len)
 
 long long parse_line(u_char *input)
 {
-	u_char *p, *q, *r;
-	int second, msec;
+	u_char *p;
+	int msec;
 	struct tm tm;
-	int len, i, j, k;
-	struct types *tt;
 
 	p = input;
 	memset(&tm, 0, sizeof(tm));
@@ -193,13 +191,9 @@ void _parse_file(FILE *fp, pcap_result *result)
 {
 	struct pcap_header ph;
 	struct pcap_file_header pf;
-	u_char *p;
-	int plen;
 	int needswap = 0;
 	int len;
-	int l2header = 0;
 	long long offset = 0;
-	long long offset2;
 	long long date;
 	u_char raw[65536];
 
@@ -226,7 +220,7 @@ void _parse_file(FILE *fp, pcap_result *result)
 			return;
 		if ((result->start = parse_line(raw)) <= 0)
 			return;
-		while(fgets(raw, sizeof(raw), fp) != NULL) {
+		while(fgets((char *)raw, sizeof(raw), fp) != NULL) {
 			if ((date = parse_line(raw)) > 0) {
 				result->end = date;
 			}
@@ -273,7 +267,6 @@ void _parse_file(FILE *fp, pcap_result *result)
 void parse_file(char *file, pcap_result *result)
 {
 	FILE *fp;
-	int ret;
 	int len;
 	int close_status = 0;
 	struct stat sb;
@@ -311,10 +304,10 @@ void parse_file(char *file, pcap_result *result)
 	}
 }
 
-void main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	pcap_result t;
-	int i, r;
+	int i;
 
 	// printf("#filename,#start,#end,#filesize,#readsize\n");
 	for (i = 1; i < argc; i++) {
@@ -322,6 +315,8 @@ void main(int argc, char *argv[])
 		parse_file(argv[i], &t);
 		if (t.start <= 0 || t.end <= 0) { t.start = -1; t.end = -1; }
 		printf("%s,%lld,%lld,%lld,%lld,%lld\n", argv[i], t.start, t.end, t.count, t.size, t.readsize);
+		fflush(stdout);
 	}
+	return 0;
 }
 

@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.93 2022/07/23 17:59:31 fujiwara Exp $
+	$Id: PcapParse.h,v 1.94 2022/08/26 16:15:38 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -304,6 +304,7 @@ enum {
 	ParsePcap_ERROR_EmptyMerge = -8,
 	ParsePcap_ERROR_Memory = -9,
 	ParsePcap_EOF = -10,
+	PcapPArse_ForceClose = -11,
 
 	ParsePcap_IPv4ChecksumError = 1,
 	ParsePcap_UDPchecksumError = 2,

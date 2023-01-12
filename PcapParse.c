@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.210 2022/08/05 07:10:18 fujiwara Exp $
+	$Id: PcapParse.c,v 1.214 2023/01/12 04:48:53 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -1726,7 +1726,10 @@ struct types { char *name; int code; } types[] = {
 { NULL, -1 },
 };
 
-enum _state { err_date = 1, err_addr, err_port, err_qname, err_class, err_type, err_flag, err_server };
+enum _state { err_date = 1, err_addr = 2, err_port = 3, err_qname = 4, err_class = 5, err_type = 6, err_flag = 7, err_server = 8, err_ignored = 9 };
+char *parse_line_error[] = {
+"NoERROR", "ErrDate", "ErrAddr", "ErrPort", "ErrQname", "ErrClass",
+"ErrType", "ErrFlag", "ErrServer", "ErrIgnored" };
 
 #if 0
 int parse_uint16(u_char *str, int len)
@@ -2085,11 +2088,23 @@ int parse_line(struct DNSdataControl* c)
 	if (c->dns.af == AF_INET) {
 		c->dns.version = 4;
 		c->ParsePcapCounter._ipv4++;
+
 		if (c->dns._transport_type == T_TCP) {
 			c->ParsePcapCounter._tcp4++;
 		} else {
 			c->ParsePcapCounter._udp4++;
 		};
+		c->dns.portaddrlen = 2+4;
+		c->dns.portaddr[0] = c->dns.p_sport >> 8;
+		c->dns.portaddr[1] = c->dns.p_sport & 0xff;
+		memcpy(c->dns.portaddr+2, c->dns.p_src, 4);
+		c->dns.portaddr[6] = 0;
+		c->dns.portaddr[7] = 53;
+		if (c->dns.p_dst != NULL) {
+			memcpy(c->dns.portaddr+8, c->dns.p_dst, 4);
+		} else {
+			memset(c->dns.portaddr+8, 0, 4);
+		}
 	} else
 	if (c->dns.af == AF_INET6) {
 		c->dns.version = 6;
@@ -2099,6 +2114,17 @@ int parse_line(struct DNSdataControl* c)
 		} else {
 			c->ParsePcapCounter._udp6++;
 		}
+		c->dns.portaddrlen = 2+16;
+		c->dns.portaddr[0] = c->dns.p_sport >> 8;
+		c->dns.portaddr[1] = c->dns.p_sport & 0xff;
+		memcpy(c->dns.portaddr+2, c->dns.p_src, 16);
+		c->dns.portaddr[18] = 0;
+		c->dns.portaddr[19] = 53;
+		if (c->dns.p_dst != NULL) {
+			memcpy(c->dns.portaddr+20, c->dns.p_dst, 16);
+		} else {
+			memset(c->dns.portaddr+20, 0, 16);
+		}
 	}
 
 	c->dns.p_dport = 53;
@@ -2107,11 +2133,11 @@ int parse_line(struct DNSdataControl* c)
 	if (c->mode & MODE_DO_ADDRESS_CHECK)
 		if (c->callback(c, CALLBACK_ADDRESSCHECK) == 0) {
 			c->ParsePcapCounter._unknown_ipaddress++;
-			return 0;
+			return err_ignored;
 		}
 
 	if (c->dns.version == 6 && (c->dns.p_src[0] & 0xfc) == 0xfc) {
-		return 0;
+		return 1;
 	}
 
 	c->ParsePcapCounter._before_checking_dnsheader++;
@@ -2148,16 +2174,24 @@ int _parse_bind9log(FILE *fp, struct DNSdataControl *c)
 	int line1 = 0;
 	int ret;
 	time_t tt1, tt2;
+#ifdef DEBUG_LOGmode
+	char buff[1024];
+#endif
 
 	tt1 = time(NULL);
 	do {
 		c->lineno++;
 		line1++;
 		memset(&c->dns, 0, sizeof(c->dns));
+#ifdef DEBUG_LOGmode
+		strncpy(buff, c->raw, sizeof(buff));
+#endif
 		ret = parse_line(c);
 		if (ret > 0 && ret < 10) {
 			c->ParsePcapCounter.error[ret]++;
-			fprintf(stderr, "error%02d: %s", ret, c->raw);
+#ifdef DEBUG_LOGmode
+			fprintf(stderr, "error%02d:%s: %s", ret, parse_line_error[ret], buff);
+#endif
 		}
 	} while(fgets((char *)c->raw, c->rawlen, fp) != NULL);
 	tt2 = time(NULL) - tt1;
@@ -2512,7 +2546,7 @@ int _parse_pcap(FILE *fp, struct DNSdataControl* c, int pass)
 	case 0xd4c3b2a1: // pcap mode big endian
 		needswap = 1;
 	case 0xa1b2c3d4: // pcap mode
-		if (pass != 0) return 0;
+		if (pass != 0) return PcapPArse_ForceClose;
 		c->input_type = INPUT_TYPE_PCAP;
 		p = (u_char *)&pf;
 		p += PCAP_FIRST_READ;
@@ -2575,7 +2609,7 @@ int _parse_pcap(FILE *fp, struct DNSdataControl* c, int pass)
 				(len == sizeof ph) ? "Packet data":"Pcap header");
 		return ParsePcap_ERROR_ShortRead;
 	case 0x0a0d0d0a: // pcapng mode
-		if (pass != 0) return 0;
+		if (pass != 0) return PcapPArse_ForceClose;
 		c->input_type = INPUT_TYPE_PCAP;
 		png3p = (struct pcapng_section_header3 *)(&pf);
 		//printf("magic=%lx length=%lx\n", png3p->magic, png3p->length);
@@ -2661,6 +2695,7 @@ int parse_pcap(char *file, struct DNSdataControl* c, int pass)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
+		if (ret == PcapPArse_ForceClose && close_status > 0) return 0;
 	} else
 	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
 		snprintf(buff, sizeof buff, "xz -cd %s", file);
@@ -2668,18 +2703,21 @@ int parse_pcap(char *file, struct DNSdataControl* c, int pass)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
+		if (ret == PcapPArse_ForceClose && close_status > 0) return 0;
 	} else if (len > 4 && strcmp(file+len-4, ".zst") == 0) {
 		snprintf(buff, sizeof buff, "zstd -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
+		if (ret == PcapPArse_ForceClose && close_status > 0) return 0;
 	} else if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
 		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
 		if ((fp = popen(buff, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
 		ret = _parse_pcap(fp, c, pass);
 		close_status = pclose(fp);
+		if (ret == PcapPArse_ForceClose && close_status > 0) return 0;
 	} else {
 		if ((fp = fopen(file, "r")) == NULL)
 			return ParsePcap_ERROR_FILE_OPEN;
@@ -2800,7 +2838,7 @@ void print_rusage()
 	struct rusage usage;
 	int r;
 
-#define	PRINT_TV(X, Y) printf("#rusage:" #Y ",%ld.%06d\n", X.Y.tv_sec, X.Y.tv_usec)
+#define	PRINT_TV(X, Y) printf("#rusage:" #Y ",%ld.%06ld\n", X.Y.tv_sec, X.Y.tv_usec)
 #define	PRINT_XX(X, Y) printf("#rusage:" #Y ",%ld\n", X.Y)
 	r = getrusage(RUSAGE_SELF, &usage);
 	PRINT_TV(usage, ru_utime);

@@ -115,6 +115,8 @@ long long getint(char *src, char **next, int *error, int errorcode)
 	if (**next == ',')
 		(*next)++;
 	else
+	if (**next == '/') {
+	} else
 	if (**next != 0) { *error = errorcode; return 0; }
 	return i;
 }

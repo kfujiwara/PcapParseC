@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.149 2022/07/20 05:48:28 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.152 2023/01/12 04:48:53 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -605,9 +605,10 @@ int callback(struct DNSdataControl *d, int mode)
 		s_src = d->dns.s_src;
 		s_dst = d->dns.s_dst;
 		if (print_filename) { printf("%s,", d->filename); }
-#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,str_rcode,tc,aa,additionaldnssecrrs,dnslen,transport,FragSize,ip_df,tcp_dnscount,tcp_fastopen,tcp_mss,tcp_delay,soa_ttl,soa_dom,ans_ttl,cname_ttl,cname,a_aaaa,"
+#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,node,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,str_rcode,tc,aa,additionaldnssecrrs,dnslen,transport,FragSize,ip_df,tcp_dnscount,tcp_fastopen,tcp_mss,tcp_delay,soa_ttl,soa_dom,ans_ttl,cname_ttl,cname,a_aaaa,"
 		printf("%d.%06d,"       // timestamp
 			"%s,%d,%s,%d,"	// source, dest
+			"%s,"		// anycast node
 			"%s,%d,%d,"	// qname qclass qtype
 			"%d,%d,%d,"	// id qr rd
 			"%d,%d,%d,"	// edns0 edns0len do
@@ -615,7 +616,7 @@ int callback(struct DNSdataControl *d, int mode)
 			"%d,"		//  additionaldnssecrrs
 			"%d,%d,%d,"	// dnslen transport_type FragSize
 			"%d,"           // ip_df
-			"%d,%d,%d,%d,"	// tcp_dnscount tcp_fastopen
+			"%d,%d,%d,%ld,"	// tcp_dnscount tcp_fastopen
 					// tcp_mss tcp_delay
 			"%d,%s,"        // soa_ttl soa_dom
 			"%d,%d,"	// ans_ttl cname_ttl
@@ -624,6 +625,7 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.tv_sec, d->dns.tv_usec,
 			d->dns.s_src, d->dns.p_sport,
 			d->dns.s_dst, d->dns.p_dport,
+			d->node,
 			d->dns.qname, d->dns.qclass, d->dns.qtype,
 			d->dns._id, d->dns._qr?1:0, d->dns._rd?1:0,
 			d->dns._edns0, d->dns._edns0 ? d->dns.edns0udpsize : 0, _do,
@@ -680,7 +682,7 @@ int callback(struct DNSdataControl *d, int mode)
 			p_dport = d->dns.p_sport;
 		}
 		if (print_queries_bind9 == 2) {
-			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
@@ -694,10 +696,12 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.ip_df?"/df ":"",
 	 		*d->dns.s_dst==0?"":"(",
 			d->dns.s_dst,
+			d->node[0] == 0 ? "": "/",
+			d->node,
 	 		*d->dns.s_dst==0?"":")",
 			additional, additional2);
 		} else {
-			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s%s%s%s%s%s%s %s%s%s\n",
+			printf("%s%02d-%s-%04d %02d:%02d:%02d.%03d queries: info: client %s#%d (%s): query: %s %s %s %s%s%s%s%s%s%s%s%s%s%s%s%s %s%s%s\n",
 			qr,
 	 		t->tm_mday, monthlabel[t->tm_mon], t->tm_year+1900,
 	 		t->tm_hour, t->tm_min, t->tm_sec,
@@ -712,7 +716,11 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns._tc?"/tc ":"",
 			d->dns._aa?"/aa ":"",
 			d->dns.ip_df?"/df ":"",
-	 		*s_dst==0?"":"(", s_dst, *s_dst==0?"":")",
+	 		*s_dst==0?"":"(",
+			s_dst,
+			d->node[0] == 0 ? "": "/",
+			d->node,
+			*s_dst==0?"":")",
 			d->dns.str_rcode == NULL ? "":d->dns.str_rcode,
 			additional, additional2);
 		}
@@ -1188,7 +1196,6 @@ void parse_args(int argc, char **argv, char *env)
 	}}
 }
 
-
 int main(int argc, char *argv[])
 {
 	char *p;
@@ -1258,7 +1265,16 @@ int main(int argc, char *argv[])
 				buff2[ret-1] = 0;
 			}
 			p = strchr(buff2, ',');
-			if (p != NULL) { *p = 0; }
+			c.node[0] = 0;
+			if (p != NULL) {
+				*p++ = 0;
+				if (isalpha(*p)) {
+					c.letter = *p;
+					strncpy(c.node, p, sizeof(c.node));
+					c.node[sizeof(c.node)-1] = 0;
+					c.nodeid = add_node_name(&c, c.node);
+				}
+			}
 printf("Loading %s\n", buff2);
 			ret = parse_pcap(buff2, &c, 0);
 			if (ret != ParsePcap_NoError) {
