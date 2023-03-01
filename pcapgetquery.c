@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.152 2023/01/12 04:48:53 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.154 2023/03/01 08:52:40 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -407,6 +407,17 @@ int print_ednsoptions(struct DNSdataControl *d, char *buff, int len)
 
 static char *transport_type_str[] = TransportTypeStr;
 
+
+int _comp4(const void *p1, const void *p2)
+{
+	return memcmp(p1, p2, 4);
+}
+
+int _comp6(const void *p1, const void *p2)
+{
+	return memcmp(p1, p2, 16);
+}
+
 int callback(struct DNSdataControl *d, int mode)
 {
 	int i, l;
@@ -642,6 +653,10 @@ int callback(struct DNSdataControl *d, int mode)
 			d->dns.answer_ttl,
 			d->dns.cname_ttl,
 			d->dns.cnamelist);
+		if (d->dns.n_ans_v4 > 1)
+			qsort(d->dns.ans_v4, d->dns.n_ans_v4, 4, _comp4);
+    	if (d->dns.n_ans_v6 > 1)
+        	qsort(d->dns.ans_v6, d->dns.n_ans_v6, 16, _comp6);
 		for (i = 0; i < d->dns.n_ans_v4; i++) {
 			inet_ntop(AF_INET, d->dns.ans_v4[i], addrstr, sizeof(addrstr));
 			printf("%s/", addrstr);
@@ -975,6 +990,7 @@ void usage(int c)
 "-Y	Print statistics\n"
 "-Z	Print label\n"
 "-r RD	specify RD=0 or RD=1 or -1:any\n"
+"-P	Preserve Case (Qname on CSV mode)\n"
 "\n"
 "Result: CSV mode (-C) ... see with -Z option\n"
 "        BIND 9 mode ... added Error:  4=IPv4HeaderChecksum u=UDPchecksum\n"
@@ -1092,9 +1108,10 @@ void parse_args(int argc, char **argv, char *env)
 {
 	int ch;
 	int print_answer_option = 0;
+	int preserve_case = 0;
 	double t;
 
-	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:Jr:XZG:x:BXp:q:n:N:s:y", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:Jr:XZG:x:BXp:q:n:N:s:yP", env)) != -1) {
 	// printf("getopt: ch=%c optarg=%s\n", ch, optarg);
 	switch (ch) {
 	case 'B':
@@ -1190,10 +1207,12 @@ void parse_args(int argc, char **argv, char *env)
 			print_tcp_delay_shorter_than = -t * 1000;
 		}
 		break;
+	case 'P': preserve_case = 1; break;
 	case '?':
 	default:
 		usage(ch);
 	}}
+	if (preserve_case == 0) { debug |= FLAG_IGNORE_CASE; }
 }
 
 int main(int argc, char *argv[])

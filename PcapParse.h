@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.94 2022/08/26 16:15:38 fujiwara Exp $
+	$Id: PcapParse.h,v 1.96 2023/03/01 08:52:40 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -153,7 +153,7 @@ struct DNSdata
       -1 ... _rcode == 1 or _rcode == 2 or ancount == 0 or another error */
   u_char ans_v4[16][4];
   int n_ans_v4;
-  u_char ans_v6[16][32];
+  u_char ans_v6[16][16];
   int n_ans_v6;
   u_char cnamelist[4096];
 };
@@ -272,10 +272,10 @@ void Print_PcapStatistics(struct DNSdataControl *d);
 #define FLAG_INFO 2
 #define FLAG_DEBUG_TCP 4
 #define	FLAG_DEBUG_UNKNOWNPROTOCOL	8
-#define	FLAG_BIND9LOG	0x10
-#define	FLAG_DEBUG_TCP_IGNORED		0x20
-#define	FLAG_DEBUG_TCP_GC		0x40
-#define	FLAG_DEBUG_128			0x80
+#define	FLAG_IGNORE_CASE	0x10
+#define	FLAG_BIND9LOG	0x20
+#define	FLAG_DEBUG_TCP_IGNORED		0x40
+#define	FLAG_DEBUG_TCP_GC		0x80
 #define	FLAG_DEBUG_256			0x100
 #define	FLAG_DEBUG_512			0x200
 #define	FLAG_SCANONLY			0x400
