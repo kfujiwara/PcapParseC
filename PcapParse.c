@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.228 2024/04/18 05:04:11 fujiwara Exp $
+	$Id: PcapParse.c,v 1.230 2024/04/18 10:11:50 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -181,14 +181,15 @@ void labelcopy(u_char *dest, u_char *src, int count, struct case_stats *s, int m
 				else if (isupper(c)) { s->uppercase++; }
 				else { s->nocase++; }
 			}
-			if (mode & GET_DNAME_LOWERCASE) c = tolower(c);
+			if (mode & GET_DNAME_LOWERCASE && isupper(c))
+				c = tolower(c);
 		}
 		*dest++ = c;
 		src++;
 	}
 }
 
-int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s)
+int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s, int mode)
 {
 	u_char c;
 	int n = 0;
@@ -203,12 +204,15 @@ int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s)
 			break;
 		default:
 			if (c > 0x20 && c < 0x7f) {
-				*dest++ = c; n++;
 				if (s != NULL) {
 					if (islower(c)) { s->lowercase++; }
-					else if (isupper(c)) { s->uppercase++; }
-					else { s->nocase++; }
+					else if (isupper(c)) {
+						s->uppercase++;
+					} else { s->nocase++; }
 				}
+				if (mode & GET_DNAME_LOWERCASE && isupper(c))
+					c = tolower(c);
+				*dest++ = c; n++;
 			} else {
 				*dest++ = '\\';
 				*dest++ = '0' + ((c / 100) % 10);
@@ -278,7 +282,7 @@ int get_dname(struct DNSdata *d, char *o, int o_len, int mode, struct case_stats
 				olen++;
 			}
 			if (mode & GET_DNAME_BIND9LOG) {
-				count = labelcopy_bind9(op, p+1, *p, s);
+				count = labelcopy_bind9(op, p+1, *p, s, mode);
 				olen += count;
 				op += count;
 			} else {
@@ -432,19 +436,6 @@ void parse_DNS_query(struct DNSdataControl *d)
 	int c;
 
 	d->ParsePcapCounter._dns_query++;
-
-	if (d->dns.version == 6 && (d->dns.p_src[0] & 0xfc) == 0xfc) {
-		return;
-	}
-#if 0
-	switch (d->dns.p_sport) {
-	case 7: /* echo */
-	case 13: /* daytime */
-	case 19: /* chargen */
-	case 37: /* time */
-		return;
-	}
-#endif
 	d->ParsePcapCounter._before_checking_dnsheader++;
 
 	do {
@@ -466,7 +457,7 @@ void parse_DNS_query(struct DNSdataControl *d)
 		}
 		memset(&d->dns.case_stats, 0, sizeof(d->dns.case_stats));
 		c = get_dname(&d->dns, d->dns.qname, sizeof(d->dns.qname),
-		    	GET_DNAME_NO_COMP | GET_DNAME_SEPARATE | ((d->enable_bind9log_style) ? GET_DNAME_BIND9LOG : 0) | ((d->debug & d->enable_dname_lowercase) ? GET_DNAME_LOWERCASE : 0),
+		    	GET_DNAME_NO_COMP | GET_DNAME_SEPARATE | (d->enable_bind9log_style?GET_DNAME_BIND9LOG:0) | (d->enable_dname_lowercase?GET_DNAME_LOWERCASE:0),
 			&d->dns.case_stats);
 		d->dns.qtype = get_uint16(&d->dns);
 		d->dns.qclass = get_uint16(&d->dns);
@@ -509,7 +500,7 @@ void print_dns_answer(struct DNSdataControl *d)
 
 	//if (d->dns._qr == 0 && d->dns._opcode == 5) { update_flag = 1; }
 	d->dns.pointer = 12;
-	c = get_dname(&d->dns, rr_name, sizeof(rr_name), GET_DNAME_NO_COMP | ((d->enable_bind9log_style) ? GET_DNAME_BIND9LOG : 0) | ((d->enable_dname_lowercase) ? GET_DNAME_LOWERCASE : 0), &d->dns.case_stats);
+	c = get_dname(&d->dns, rr_name, sizeof(rr_name), GET_DNAME_NO_COMP | (d->enable_bind9log_style?GET_DNAME_BIND9LOG:0) | (d->enable_dname_lowercase?GET_DNAME_LOWERCASE:0), &d->dns.case_stats);
 	rr_type = get_uint16(&d->dns);
 	rr_class = get_uint16(&d->dns);
 	if (print_info) {

@@ -1,5 +1,5 @@
 /*
-	$Id: PcapSelectL3.c,v 1.35 2021/10/18 17:44:14 fujiwara Exp $
+	$Id: PcapSelectL3.c,v 1.37 2024/04/08 10:43:17 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -345,6 +345,9 @@ int pcap_open(struct PcapFiles *pcap, char *file)
 	} else
 	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
 		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
+	} else
+	if (len > 4 && strcmp(file+len-4, ".zst") == 0) {
+		snprintf(buff, sizeof buff, "zstd -cd %s", file);
 	} else
 	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
 		snprintf(buff, sizeof buff, "gzip -cd %s", file);
@@ -769,7 +772,7 @@ void parse_args(int argc, char **argv, char *env)
 {
 	int ch;
 
-	while ((ch = getopt_env(argc, argv, "vB:E:O:E:46a:b:f:t:FI:SsHL:TUn:QR", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "vB:E:O:E:46a:b:f:t:FI:SsHL:TUn:QRe:", env)) != -1) {
 	switch (ch) {
 	case 'Q': accept_query = 1; break;
 	case 'R': accept_reply = 1; break;

@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.165 2024/04/12 03:43:28 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.167 2024/04/18 10:11:50 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -980,6 +980,8 @@ void usage(int c)
 "\n"
 "-9      Print queries in BIND 9 querylog format\n"
 "-C      Print queries in CSV format\n"
+"-P      Erroneous qname characters are changed to '!' (otherwise, BIND 9 style\n"
+"-i      Qname are changed as lowercase\n"
 "-q NN   Print query counter in each NN second\n"
 "\n"
 "-D num  Debug flag\n"
@@ -987,16 +989,14 @@ void usage(int c)
 "-a ipaddr      print if the ipaddr matches source addr/port\n"
 "-b ipaddr#port[,ipaddr#port,..]  specify destination IP addr/port\n"
 "-f list specify destination TLD/root server IP address list file\n"
-"-t TLD  Match specified TLD servers as destination\n"
-"            requires -f option\n"
+"-t TLD  Match specified TLD servers as destination (requires -f)\n"
 "-I file Load IPaddrlist and print packets whose IP address matches\n"
 "-J      print IPaddrlist\n"
 "-N file Load qname list file and print packets whose qname matches\n"
 "-n qname  Sepficy qname: print packets whose qname matches\n"
 "-x XX,XX,XX : Exclude queries\n"
-"   XX: v4, v6, TCP, UDP, OPCODE0, noOPCODE0,\n"
-"       EDNS, noEDNS, DO, noDO, AD, noAD, RD, noRD,\n"
-"       TC, noTC, RCODE0, noRCODE0, ANCOUNT0, noANCOUNT0, noREF, REF (response)\n"
+"   XX: v4,v6,TCP,UDP,OPCODE0,noOPCODE0,EDNS,noEDNS,DO,noDO,AD,noAD,RD,noRD,\n"
+"       TC,noTC,RCODE0,noRCODE0,ANCOUNT0,noANCOUNT0,noREF,REF (response)\n"
 "       QNAME (inverse -n/-N options)\n"
 "-p XX,XX,XX : Print DNS answer options\n"
 "       RefNS,RefGlue,AuthSOA,ANSWER,INFO,ALLRR\n"
@@ -1005,13 +1005,12 @@ void usage(int c)
 "-L size: print if DNS size is smaller or equal to 'size'\n"
 "-R      Print response detail\n"
 "-o off  Timezone read offset\n"
-"-R      print response detail\n"
 "-y      print filename\n"
 "-O      Print EDNS0 option\n"
 "-g      Print Checksum Error\n"
 "-c      Print packets with error only\n"
 "-s time Data start time\n"
-"-l len  Data length (second)\n"
+"-l len  Data time length (second)\n"
 "-T msec Print packets if RTT >= msec\n"
 "-T -msec Print packets if RTT < msec\n"
 "-S      Print TCP/SYN (CSV mode only)\n"
@@ -1020,7 +1019,6 @@ void usage(int c)
 "-Y      Print statistics\n"
 "-Z      Print label\n"
 "-r RD   specify RD=0 or RD=1 or -1:any\n"
-"-P      Preserve Case (Qname on CSV mode)\n"
 "\n"
 "Result: CSV mode (-C) ... see with -Z option\n"
 "        BIND 9 mode ... added Error:  4=IPv4HeaderChecksum u=UDPchecksum\n"
@@ -1138,65 +1136,42 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 	int print_answer_option = 0;
 	double t;
 
-	c->enable_dname_lowercase = 1;
+	c->enable_dname_lowercase = 0;
+	c->enable_bind9log_style = 1;
 
-	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:Jr:XZG:x:BXp:q:n:N:s:yPRS", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:Jr:XZG:x:BXp:q:n:N:s:yPRSi", env)) != -1) {
 	// printf("getopt: ch=%c optarg=%s\n", ch, optarg);
 	switch (ch) {
-	case 'B':
-		both_direction = 1; break;
-	case 'n':
-		register_qname_hash(optarg);
-		break;
-	case 'N':
-		load_qname_hash(optarg);
-		break;
-	case 'a':
-		register_ipaddr_port_hash(optarg, &src_hash);
-		break;
-	case 'b':
-		register_ipaddr_port_hash(optarg, &dst_hash);
-		break;
+	case 'P': c->enable_bind9log_style = 0; break;
+	case 'B': both_direction = 1; break;
+	case 'n': register_qname_hash(optarg); break;
+	case 'N': load_qname_hash(optarg); break;
+	case 'a': register_ipaddr_port_hash(optarg, &src_hash); break;
+	case 'b': register_ipaddr_port_hash(optarg, &dst_hash); break;
 	case 'C': print_queries_csv = 1; break;
-	case '9': print_queries_bind9++;
-		
-		c->enable_bind9log_style = 1;
-		break;
+	case '9': print_queries_bind9++; c->enable_bind9log_style = 1; break;
 	case 'q':
 		counter.interval = strtol(optarg, NULL, 10);
-		if (counter.interval == 0 && errno != 0) {
-			usage('L');
-		}
-		counter.counter = 0;
-		counter.prev = 0;
-		print_query_counter = 1;
-		break;
+		if (counter.interval == 0 && errno != 0) { usage('L'); }
+		counter.counter = 0; counter.prev = 0; print_query_counter = 1; break;
 	case 'D': c->debug = strtol(optarg, NULL, 10);
-		  if (c->debug == 0 && errno != 0) {
-			usage('D');
-		  }
-		  break;
+		  if (c->debug == 0 && errno != 0) { usage('D'); } break;
 	case 'O': tz_offset = atoi(optarg); break;
 	case 'o': tzread_offset = atoi(optarg); break;
 	case 'Q': c->mode |= MODE_PARSE_QUERY; break;
 	case 'A':
 		c->mode |= MODE_PARSE_ANSWER | MODE_ANSWER_TTL_CNAME_PARSE;
-		do_print_dns_answer++;
-		break;
+		do_print_dns_answer++; break;
 	case 'Y': print_statistics = 1; break;
 	case 'y': print_filename = 1; break;
-	case 'R':
-		print_response_detail = 1;
-		flag_print_ednsopt = 1;
-		break;
+	case 'R': print_response_detail = 1; flag_print_ednsopt = 1; break;
 	case 'v': flag_v = 1; break;
 	case 'g': flag_print_error = !flag_print_error; break;
 	case 'c': flag_error_only++; break;
 	case 's': data_start = atoi(optarg); break;
 	case 'l': data_time_length = atoi(optarg); break;
 	case 'I': load_ipaddrlist(optarg); break;
-	case 'J': flag_print_ipaddr_hash = 1;
-		  break;
+	case 'J': flag_print_ipaddr_hash = 1; break;
 	case 'f': serverlist_file = optarg; break;
 	case 't': if (serverlist_file != NULL) {
 			load_ipaddrlist_tld(optarg);
@@ -1206,43 +1181,28 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 		  break;
 	case 'r':
 		select_rd = atoi(optarg);
-		if (select_rd < -1 || select_rd > 1 || 
-			(select_rd == 0 && *optarg != '0'))
+		if (select_rd<-1 || select_rd>1 || (select_rd==0 && *optarg != '0'))
 			usage(ch);
 		break;
 	case 'Z': flag_print_labels = 1; break;
 	case 'X': do_print_hexdump = 1; break;
  	case 'G': flag_greater_than = strtol(optarg, NULL, 10);
-		  if (flag_greater_than == 0 && errno != 0) {
-			usage(ch);
-		  }
+			if (flag_greater_than == 0 && errno != 0) { usage(ch); }; break;	
  	case 'L': flag_smaller_than = strtol(optarg, NULL, 10);
-		  if (flag_smaller_than == 0 && errno != 0) {
-			usage(ch);
-		  }
-		  break;
-	case 'x': if (parse_exclude_option(optarg) != 0) usage(ch);
-			break;
+		  if (flag_smaller_than == 0 && errno != 0) { usage(ch); } break;
+	case 'x': if (parse_exclude_option(optarg) != 0) usage(ch); break;
 	case 'p': if ((print_answer_option = parse_print_answer_options(optarg)) == -1) usage(ch);
-		c->debug |= print_answer_option;
+		c->debug |= print_answer_option; break;
+	case 'e': flag_ignore_error = 1; break;
+	case 'T': t = atof(optarg);
+		if (t >= 0) { print_tcp_delay_longer_than = t * 1000; }
+		else { print_tcp_delay_shorter_than = -t * 1000; }
 		break;
-	case 'e':
-		flag_ignore_error = 1;
-		break;
-	case 'T':
-		t = atof(optarg);
-		if (t >= 0) {
-			print_tcp_delay_longer_than = t * 1000;
-		} else {
-			print_tcp_delay_shorter_than = -t * 1000;
-		}
-		break;
-	case 'P': c->enable_dname_lowercase = 0; break;
+	case 'i': c->enable_dname_lowercase = 1; break;
 	case 'S': print_tcpsyn = 1; break;
 	case 'z': c->enable_tcp_state = 1; break;
 	case '?':
-	default:
-		usage(ch);
+	default: usage(ch);
 	}}
 }
 
