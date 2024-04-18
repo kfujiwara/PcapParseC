@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.96 2023/03/01 08:52:40 fujiwara Exp $
+	$Id: PcapParse.h,v 1.102 2024/04/17 07:27:58 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -58,6 +58,7 @@ struct DNSdata
   u_char *_ip;
   u_char *protoheader;
   int protolen;
+  int datatype;
   u_char *dns;
   u_char *endp;
   int dnslen;
@@ -66,7 +67,8 @@ struct DNSdata
   u_char _transport_type; /* T_UDP, T_UDP_FRAG, T_TCP, T_TCP_FRAG */
   u_char tcp_fastopen; // FastOpen
   int64_t tcp_delay; // Round Trip Time from TCP  ... data - SYN (must > 0)
-  int tcp_mss;         // MSS value
+  int64_t tcp_syn_ack_delay; // ACK - SYN (must >= 0)
+  int tcp_mss;         // MSS valuedata
   int tcp_dnscount;    // Number of queries in one TCP
   int len;
   int iplen;
@@ -77,8 +79,6 @@ struct DNSdata
   u_int32_t tv_sec;
   u_int32_t tv_usec;
   int64_t ts;
-  char s_src[INET6_ADDRSTRLEN];
-  char s_dst[INET6_ADDRSTRLEN];
   char qname[PcapParse_DNAMELEN];
   struct case_stats case_stats;
   char qnamebuf[PcapParse_DNAMELEN];
@@ -178,6 +178,7 @@ struct PcapStatistics
 	int _udp6;
 	int _tcp6;
 	int _tcp4_frag;
+	int _tcp4_frag_next;
 	int _udp4_frag_first;
 	int _udp4_frag_next;
 	int _tcp6_frag;
@@ -226,8 +227,14 @@ struct DNSdataControl {
   int nodeid;
   struct PcapStatistics ParsePcapCounter;
   struct DNSdata dns;
-  int debug;
+  int enable_tcp_state;
+  int enable_tcpsyn_callback;
+  int enable_dname_lowercase;
+  int enable_bind9log_style;
+  int do_address_check;
+  int do_scanonly;
   int mode;
+  int debug;
   int tz_read_offset;
   int linktype;
   int caplen;
@@ -266,31 +273,31 @@ void Print_PcapStatistics(struct DNSdataControl *d);
 #define	MODE_ANSWER_TTL_CNAME_PARSE	4
 #define	MODE_IGNOREERROR	8
 #define	MODE_IGNORE_UDP_CHECKSUM_ERROR	16
-#define	MODE_DO_ADDRESS_CHECK		32
 
 #define FLAG_DUMP 1
 #define FLAG_INFO 2
 #define FLAG_DEBUG_TCP 4
-#define	FLAG_DEBUG_UNKNOWNPROTOCOL	8
-#define	FLAG_IGNORE_CASE	0x10
-#define	FLAG_BIND9LOG	0x20
-#define	FLAG_DEBUG_TCP_IGNORED		0x40
-#define	FLAG_DEBUG_TCP_GC		0x80
-#define	FLAG_DEBUG_256			0x100
-#define	FLAG_DEBUG_512			0x200
-#define	FLAG_SCANONLY			0x400
-#define	FLAG_PRINTANS_ALLRR		0x800
-#define	FLAG_PRINTANS_REFNS		0x1000
-#define	FLAG_PRINTANS_REFGLUE		0x2000
-#define	FLAG_PRINTANS_AUTHSOA		0x4000
-#define	FLAG_PRINTANS_INFO		0x8000
-#define	FLAG_PRINTANS_ANSWER		0x10000
-#define	FLAG_PRINTEDNSSIZE		0x20000
-#define	FLAG_PRINTFLAG			0x40000
-#define	FLAG_PRINTDNSLEN		0x80000
+#define FLAG_DEBUG_UNKNOWNPROTOCOL	8
+//#define FLAG_IGNORE_CASE	0x10
+//#define FLAG_BIND9LOG	0x20
+//#define FLAG_DEBUG_TCP_IGNORED	0x40
+//#define FLAG_DEBUG_TCP_GC		0x80
+#define FLAG_DEBUG_256			0x100
+#define FLAG_DEBUG_512			0x200
+#define FLAG_SCANONLY			0x400
+#define FLAG_PRINTANS_ALLRR		0x800
+#define FLAG_PRINTANS_REFNS		0x1000
+#define FLAG_PRINTANS_REFGLUE		0x2000
+#define FLAG_PRINTANS_AUTHSOA		0x4000
+#define FLAG_PRINTANS_INFO		0x8000
+#define FLAG_PRINTANS_ANSWER		0x10000
+#define FLAG_PRINTEDNSSIZE		0x20000
+#define FLAG_PRINTFLAG			0x40000
+#define FLAG_PRINTDNSLEN		0x80000
 
 #define	CALLBACK_PARSED		1
 #define	CALLBACK_ADDRESSCHECK	2
+#define	CALLBACK_TCPSYN		3
 
 enum {
 	ParsePcap_NoError = 0,
@@ -320,11 +327,14 @@ enum {
 T_UDP = 1, T_UDP_FRAG = 2, T_TCP = 3, T_TCP_FRAG = 4, T_TCP_PARTIAL = 5,
 };
 
+enum { DATATYPE_DNS = 0, DATATYPE_TCPSYN = 1 };
+
 #define	TransportTypeStr { "Unknown", "UDP", "UDP_FRAG", "TCP", "TCP_FRAG", "TCP_Partial" }
 
 #define	TESTDATA_HEAD "#TESTDATA"
 
 extern int tcpbuff_max;
+extern char *PcapParseC_datatype[];
 
 void print_rusage(void);
 

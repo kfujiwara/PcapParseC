@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.c,v 1.216 2023/03/01 08:52:40 fujiwara Exp $
+	$Id: PcapParse.c,v 1.228 2024/04/18 05:04:11 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -143,7 +143,7 @@ void hexdump(char *msg, u_char *data, int len)
 #define GET_DNAME_NO_SAVE 2
 #define	GET_DNAME_SEPARATE 4
 #define	GET_DNAME_BIND9LOG 8
-#define GET_DNAME_IGNORECASE 16
+#define GET_DNAME_LOWERCASE 16
 
 unsigned long long int get_uint32(struct DNSdata *d)
 {
@@ -181,7 +181,7 @@ void labelcopy(u_char *dest, u_char *src, int count, struct case_stats *s, int m
 				else if (isupper(c)) { s->uppercase++; }
 				else { s->nocase++; }
 			}
-			if (mode & GET_DNAME_IGNORECASE) c = tolower(c);
+			if (mode & GET_DNAME_LOWERCASE) c = tolower(c);
 		}
 		*dest++ = c;
 		src++;
@@ -432,8 +432,6 @@ void parse_DNS_query(struct DNSdataControl *d)
 	int c;
 
 	d->ParsePcapCounter._dns_query++;
-	inet_ntop(d->dns.af, d->dns.p_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
-	inet_ntop(d->dns.af, d->dns.p_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
 
 	if (d->dns.version == 6 && (d->dns.p_src[0] & 0xfc) == 0xfc) {
 		return;
@@ -468,7 +466,7 @@ void parse_DNS_query(struct DNSdataControl *d)
 		}
 		memset(&d->dns.case_stats, 0, sizeof(d->dns.case_stats));
 		c = get_dname(&d->dns, d->dns.qname, sizeof(d->dns.qname),
-		    	GET_DNAME_NO_COMP | GET_DNAME_SEPARATE | ((d->debug & FLAG_BIND9LOG) ? GET_DNAME_BIND9LOG : 0) | ((d->debug & FLAG_IGNORE_CASE) ? GET_DNAME_IGNORECASE : 0),
+		    	GET_DNAME_NO_COMP | GET_DNAME_SEPARATE | ((d->enable_bind9log_style) ? GET_DNAME_BIND9LOG : 0) | ((d->debug & d->enable_dname_lowercase) ? GET_DNAME_LOWERCASE : 0),
 			&d->dns.case_stats);
 		d->dns.qtype = get_uint16(&d->dns);
 		d->dns.qclass = get_uint16(&d->dns);
@@ -483,6 +481,7 @@ void parse_DNS_query(struct DNSdataControl *d)
 	if (d->dns.error & ParsePcap_EDNSError)
 		d->ParsePcapCounter._edns_error++;
 	d->ParsePcapCounter._parsed_dnsquery++;
+	d->dns.datatype = DATATYPE_DNS;
 	(void)(d->callback)(d, CALLBACK_PARSED);
 }
 
@@ -496,7 +495,11 @@ void print_dns_answer(struct DNSdataControl *d)
 	int anssec, authsec, additional;
 	int rr_rdlength0;
 	int c;
+	char s_src[INET6_ADDRSTRLEN];
+	char s_dst[INET6_ADDRSTRLEN];
 
+	inet_ntop(d->dns.af, d->dns.p_src, s_src, sizeof(s_src));
+	inet_ntop(d->dns.af, d->dns.p_dst, s_dst, sizeof(s_dst));
 	int print_refns = (d->debug & FLAG_PRINTANS_REFNS) || (d->debug & FLAG_PRINTANS_ALLRR);
 	int print_refglue = (d->debug & FLAG_PRINTANS_REFGLUE) || (d->debug & FLAG_PRINTANS_ALLRR);
 	int print_answer = (d->debug & FLAG_PRINTANS_ANSWER) || (d->debug & FLAG_PRINTANS_ALLRR);
@@ -506,11 +509,11 @@ void print_dns_answer(struct DNSdataControl *d)
 
 	//if (d->dns._qr == 0 && d->dns._opcode == 5) { update_flag = 1; }
 	d->dns.pointer = 12;
-	c = get_dname(&d->dns, rr_name, sizeof(rr_name), GET_DNAME_NO_COMP | ((d->debug & FLAG_BIND9LOG) ? GET_DNAME_BIND9LOG : 0) | ((d->debug & FLAG_IGNORE_CASE) ? GET_DNAME_IGNORECASE : 0), &d->dns.case_stats);
+	c = get_dname(&d->dns, rr_name, sizeof(rr_name), GET_DNAME_NO_COMP | ((d->enable_bind9log_style) ? GET_DNAME_BIND9LOG : 0) | ((d->enable_dname_lowercase) ? GET_DNAME_LOWERCASE : 0), &d->dns.case_stats);
 	rr_type = get_uint16(&d->dns);
 	rr_class = get_uint16(&d->dns);
 	if (print_info) {
-		printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%02x:%02x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", d->dns.s_src, d->dns.p_sport, d->dns.s_dst, d->dns.p_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag1, d->dns._flag2, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
+		printf("%s.%d -> %s.%d: %s %d %d edns0=%d flag=%02x:%02x do=%d %d/%d/%d dnssecrr=%d iplen=%d dnslen=%d\n", s_src, d->dns.p_sport, s_dst, d->dns.p_dport, rr_name, rr_type, rr_class, d->dns._edns0, d->dns._flag1, d->dns._flag2, d->dns._do, d->dns.dns[7], d->dns.dns[9], d->dns.dns[11], d->dns.additional_dnssec_rr, d->dns.iplen, d->dns.dnslen);
 	}
 	anssec = d->dns.dns[7];
 	authsec = d->dns.dns[9];
@@ -675,7 +678,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	d->dns.soa_ttl = -1;
 	*(d->dns.soa_dom) = 0;
 
-	if (d->mode & MODE_DO_ADDRESS_CHECK)
+	if (d->do_address_check)
 		if (!d->callback(d, CALLBACK_ADDRESSCHECK)) {
 			d->ParsePcapCounter._unknown_ipaddress++;
 			return;
@@ -685,7 +688,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	if (d->dns.dns[4] != 0 && d->dns.dns[5] != 1) return;
 	memset(&cname, 0, sizeof cname);
 	memset(&d->dns.case_stats, 0, sizeof(d->dns.case_stats));
-	c = get_dname(&d->dns, d->dns.qname, sizeof(d->dns.qname), GET_DNAME_NO_COMP | GET_DNAME_SEPARATE | ((d->mode & FLAG_IGNORE_CASE)?GET_DNAME_IGNORECASE:0), &d->dns.case_stats);
+	c = get_dname(&d->dns, d->dns.qname, sizeof(d->dns.qname), GET_DNAME_NO_COMP | GET_DNAME_SEPARATE | (d->enable_dname_lowercase?GET_DNAME_LOWERCASE:0), &d->dns.case_stats);
 	d->dns.qtype = get_uint16(&d->dns);
 	d->dns.qclass = get_uint16(&d->dns);
 	if (c <= 0 || d->dns.qtype < 0 || d->dns.qclass < 0) return;
@@ -700,10 +703,8 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	if (d->dns._rcode == 0 && anssec == 0) {
 		if (authsec != 0 && d->dns._aa == 0) {
 			d->dns.str_rcode = rcodestr[17];
-			d->dns._rcode = 0;
 		} else {
 			d->dns.str_rcode = rcodestr[16];
-			d->dns._rcode = -1;
 		}
 	}
 	j = anssec + authsec + additional;
@@ -800,8 +801,6 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	if (j != 0) {
 		d->dns.error |= ParsePcap_AnswerAnalysisError;
 	}
-	inet_ntop(d->dns.af, d->dns.p_src, (char *)d->dns.s_src, sizeof(d->dns.s_src));
-	inet_ntop(d->dns.af, d->dns.p_dst, (char *)d->dns.s_dst, sizeof(d->dns.s_dst));
 	d->ParsePcapCounter._parsed_dnsquery++;
 
 	if ((d->mode & MODE_ANSWER_TTL_CNAME_PARSE) != 0) {
@@ -870,6 +869,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	} else {
 		d->dns._answertype = _ANSWER_UNKNOWN;
 	}
+	d->dns.datatype = DATATYPE_DNS;
 	(void)(d->callback)(d, CALLBACK_PARSED);
 }
 
@@ -893,7 +893,7 @@ void parse_DNS(struct DNSdataControl *d)
 	d->dns._ancount = (d->dns.dns[6] << 8) | d->dns.dns[7];
 	d->dns._nscount = (d->dns.dns[8] << 8) | d->dns.dns[9];
 	d->dns._arcount = (d->dns.dns[10] << 8) | d->dns.dns[11];
-	if (d->mode & MODE_DO_ADDRESS_CHECK) {
+	if (d->do_address_check) {
 		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
 			d->ParsePcapCounter._unknown_ipaddress++;
 			return;
@@ -950,26 +950,35 @@ struct TCPbuff {
 	u_char portaddr[36]; // srcport, srcaddr, dstport, dstaddr
 	u_char portaddrlen;  // 2        alen     2        alen
 	u_char alen;
+	u_char valid;
 	int datalen;
 	int count;
 	int tcp_dnscount;
 	u_int64_t ts_syn; 
+	u_int64_t ts_ack; 
 	u_int64_t ts_first_data;
-	u_int64_t ts_last;
 	u_int64_t ts_fin;
+	u_int64_t ts_last;
 	int tcp_mss;
 	int tcp_fastopen;
 	int64_t tcp_delay;
+	int64_t tcp_syn_ack_delay;
 	u_char buff[TCPBUF_BUFFLEN];
 	UT_hash_handle hh;
+	struct TCPbuff *next;
 };
 
+static struct TCPbuff *tcpbuff_data = NULL;
+static struct TCPbuff **tcpbuff_sort = NULL;
+static struct TCPbuff *tcpbuff_unused = NULL;
+static int tcpbuff_unused_count = 0;
+static int tcpbuff_size = 4000;
+static int tcpbuff_forcefree_size = 100;
+static int64_t tcpbuff_last_get = 0;
+static int64_t tcpbuff_last_gc = 0;
 static struct TCPbuff *tcpbuff_hash = NULL;
 static u_int64_t tcpbuff_last_ts = 0;
-int tcpbuff_gc_lim = 1000;
 u_int64_t tcpbuff_MSL = 60*1000000LL;
-#define TCPBUF_GC_LIM_ADD 300
-u_int64_t tcpbuff_gc_limtime = 60*1000000LL;
 int tcp_n_hash_find = 0;
 int tcp_n_hash_add = 0;
 int tcp_n_hash_del = 0;
@@ -1018,7 +1027,8 @@ void parse_TCP_data(struct DNSdataControl *d, int datalen, struct TCPbuff *t, in
 			if (d->dns.tcp_mss == 0) d->dns.tcp_mss = t->tcp_mss;
 			if (d->dns.tcp_fastopen == 0) d->dns.tcp_fastopen = t->tcp_fastopen;
 			d->dns.tcp_delay = t->tcp_delay;
-			t->tcp_delay = -1;
+			d->dns.tcp_syn_ack_delay = t->tcp_syn_ack_delay;
+			//t->tcp_delay = -1;
 			d->dns.dnslen = j;
 			d->dns.dns = t->buff + 2;
 			d->dns.endp = d->dns.dns + j;
@@ -1047,7 +1057,7 @@ void parse_TCP_data(struct DNSdataControl *d, int datalen, struct TCPbuff *t, in
 				if (d->dns.tcp_mss == 0) d->dns.tcp_mss = t->tcp_mss;
 				if (d->dns.tcp_fastopen == 0) d->dns.tcp_mss = t->tcp_fastopen;
 				d->dns.tcp_delay = t->tcp_delay;
-				t->tcp_delay = -1;
+				//t->tcp_delay = -1;
 				parse_DNS(d);
 			} else {
 				//hexdump("#INFO_TCP:T_TCP_PARTIAL:do parse_DNS:partial_strangeData_ignored", t->buff, t->datalen);
@@ -1101,75 +1111,136 @@ void tcpbuff_statistics()
 
 int dump_tcpbuff_sort_sub(const void *aa, const void *bb)
 {
+	int64_t left, right;
 	const struct TCPbuff **a = (const struct TCPbuff **)aa;
 	const struct TCPbuff **b = (const struct TCPbuff **)bb;
-	return (*a)->ts_last < (*b)->ts_last;
+	left = (*a)->ts_last;
+	right = (*b)->ts_last;
+	return (left > right) - (right > left);
 }
 
 void dump_tcpbuff()
 {
 	int i, j;
-	struct TCPbuff **pp, *t, *tmp;
+	struct TCPbuff *t, *tmp;
 	int max = HASH_CNT(hh, tcpbuff_hash);
 	int64_t last;
 
 	if (max == 0) return;
-	pp = malloc(max * sizeof(pp[0]));
 	i = 0;
 	HASH_ITER(hh, tcpbuff_hash, t, tmp) {
-		pp[i++] = t;
+		tcpbuff_sort[i++] = t;
 		if (i >= max) break;
 	}
-	qsort(pp, max, sizeof(pp[0]), dump_tcpbuff_sort_sub);
-	last = pp[max-1]->ts_last;
+	qsort(tcpbuff_sort, max, sizeof(tcpbuff_sort[0]), dump_tcpbuff_sort_sub);
+	last = tcpbuff_sort[max-1]->ts_last;
 	for (i = 0; i < max; i++) {
-		printf("%04d %ld %ld %d %d ", i, pp[i]->ts_last, last-pp[i]->ts_last,
-			pp[i]->datalen, pp[i]->buff[0]*256+pp[i]->buff[1]);
-		for (j = 0; j < pp[i]->portaddrlen*2; j++) {
-			printf("%02x", pp[i]->portaddr[j]);
+		printf("%04d %ld %ld %d %d ", i, tcpbuff_sort[i]->ts_last, last-tcpbuff_sort[i]->ts_last,
+			tcpbuff_sort[i]->datalen, tcpbuff_sort[i]->buff[0]*256+tcpbuff_sort[i]->buff[1]);
+		for (j = 0; j < tcpbuff_sort[i]->portaddrlen*2; j++) {
+			printf("%02x", tcpbuff_sort[i]->portaddr[j]);
 		}
 		printf("\n");
 	}
 }
 
-void tcpbuff_gc(int64_t ts, int debug)
+void init_tcpbuff_data()
 {
-	int removed, max;
-	struct TCPbuff *t, *tmp;
-	int64_t diff, last;
+	int s, i;
 
-	max = HASH_CNT(hh, tcpbuff_hash);
-	removed = 0;
-
-	HASH_ITER(hh, tcpbuff_hash, t, tmp) {
-		last = t->ts_last;
-		if (t->ts_fin != 0) {
-			if (t->ts_fin + tcpbuff_MSL < last) {
-				t->ts_fin = 0;
-			} else {
-				last = t->ts_fin + tcpbuff_MSL;
-			}
-		}
-		diff = ts - last;
-		if (diff >= tcpbuff_gc_limtime) {
-			HASH_DELETE(hh, tcpbuff_hash, t);
-			free(t);
-			tcp_n_hash_del++;
-			removed++;
-		}
-	}
-	if (debug & FLAG_DEBUG_TCP_GC)
-		printf("#INFO_TCP:tcpbuff_gc:%d/%d removed\n", removed, max);
-	if (removed < TCPBUF_GC_LIM_ADD) tcpbuff_gc_lim += TCPBUF_GC_LIM_ADD;
+	tcpbuff_data = my_malloc(s=sizeof(struct TCPbuff)*tcpbuff_size);
+	tcpbuff_sort = my_malloc(s=sizeof(struct TCPbuff*)*tcpbuff_size);
+	memset(tcpbuff_data, 0, s);
+	i = tcpbuff_size;
+	// tcpbuff_data[i-1].next = 0;
+	while (--i > 0) { tcpbuff_data[i-1].next = &tcpbuff_data[i]; }
+	tcpbuff_unused = tcpbuff_data;
+	tcpbuff_unused_count = tcpbuff_size;
 }
 
-void tcpbuff_remove()
+void tcpbuff_free(struct TCPbuff *t)
+{
+	t->valid = 0;
+	t->next = tcpbuff_unused;
+	tcpbuff_unused = t;
+	tcpbuff_unused_count++;
+}
+
+void tcpbuff_remove(struct TCPbuff *t)
+{
+	HASH_DELETE(hh, tcpbuff_hash, t);
+	memset(t, 0, sizeof(*t));
+	t->valid = 0;
+	tcpbuff_free(t);
+}
+
+struct TCPbuff *tcpbuff_get(int64_t ts)
+{
+	int i;
+	int force_free = 0;
+	int gc_free = 0;
+	int64_t last;
+	int64_t diff = ts - tcpbuff_last_get;
+	int64_t gc_diff = ts - tcpbuff_last_gc;
+
+	tcpbuff_last_get = ts;
+	struct TCPbuff *t;
+	if (tcpbuff_unused == NULL || gc_diff > tcpbuff_MSL) {
+		tcpbuff_last_gc = ts;
+		for (i = 0; i < tcpbuff_size; i++) {
+			t = &tcpbuff_data[i];
+			if (t->valid != 0) {
+				last = t->ts_last;
+				if (t->ts_fin > last) {
+					last = t->ts_fin;
+				}
+				if (ts - last >= tcpbuff_MSL) {
+					gc_free++;
+					HASH_DELETE(hh, tcpbuff_hash, t);
+					tcpbuff_free(t);
+					tcp_n_hash_del++;
+				}
+			}
+		}
+	}
+	if (tcpbuff_unused != NULL) {
+	//	printf("tcpbuff_get:diff=%lld/%lld:gc_free=%d:unused=%d\n", diff, gc_diff, gc_free, tcpbuff_unused_count);
+		t = tcpbuff_unused;
+		tcpbuff_unused = t->next;
+		tcpbuff_unused_count--;
+		fflush(stdout);
+		return t;
+	}
+	for (i = 0; i < tcpbuff_size; i++) {
+		tcpbuff_sort[i] = &tcpbuff_data[i];
+	}
+	qsort(tcpbuff_sort, tcpbuff_size, sizeof(tcpbuff_sort[0]), dump_tcpbuff_sort_sub);
+#if 0
+	for (i = 0; i < tcpbuff_size; i++) {
+		t = tcpbuff_sort[i];
+		printf("tcpbuff_sort[%d]: valid=%d last=%ld / %ld\n", i, t->valid, t->ts_last, ts - t->ts_last);
+	}
+#endif
+	//printf("tcpbuff_get:forcefree:get_diff=%lld/%lld:unused=%d ts-last=%ld/%ld//%ld//%ld/%ld\n", diff, gc_diff, tcpbuff_unused_count+tcpbuff_forcefree_size, ts-tcpbuff_sort[0]->ts_last, ts-tcpbuff_sort[tcpbuff_forcefree_size-1]->ts_last, ts-tcpbuff_sort[tcpbuff_forcefree_size]->ts_last, ts-tcpbuff_sort[tcpbuff_size-2]->ts_last, ts-tcpbuff_sort[tcpbuff_size-1]->ts_last);
+	for (i = 0; i < tcpbuff_forcefree_size; i++) {
+		t = tcpbuff_sort[i];
+		tcpbuff_remove(t);
+		tcp_n_hash_del++;
+		tcp_n_forcefree++;
+	}
+	fflush(stdout);
+	t = tcpbuff_unused;
+	tcpbuff_unused = t->next;
+	tcpbuff_unused_count--;
+	return t;
+}
+
+void tcpbuff_remove_all()
 {
 	struct TCPbuff *t, *tmp;
 
 	HASH_ITER(hh, tcpbuff_hash, t, tmp) {
-		HASH_DELETE(hh, tcpbuff_hash, t);
-		free(t);
+		tcpbuff_remove(t);
 		tcp_n_hash_del++;
 	}
 }
@@ -1189,18 +1260,21 @@ void parse_TCP(struct DNSdataControl *d)
 	int flag;
 	int syn, ack, fin, rst, psh;
 	u_char const * p;
-	struct TCPbuff *t, *found;
+	struct TCPbuff *t, *found, *found_syn;
 	char TcpStr[256];
 
+	if (tcpbuff_data == NULL) {
+		init_tcpbuff_data();
+	} else
 	if (tcpbuff_last_ts != 0 && tcpbuff_last_ts > d->dns.ts) {
-		if (d->debug & FLAG_DEBUG_TCP_GC)
+		if (d->debug & FLAG_DEBUG_TCP)
 			printf("#INFO_TCP:tcpbuff_remove:ALL %d removed\n", HASH_CNT(hh, tcpbuff_hash));
-		tcpbuff_remove();
+		tcpbuff_remove_all();
 	}
 	tcpbuff_last_ts = d->dns.ts;
 	d->dns.p_sport = d->dns.protoheader[0] * 256 + d->dns.protoheader[1];
 	d->dns.p_dport = d->dns.protoheader[2] * 256 + d->dns.protoheader[3];
-	if (d->mode & MODE_DO_ADDRESS_CHECK) {
+	if (d->do_address_check) {
 		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
 			d->ParsePcapCounter._unknown_ipaddress++;
 			return;
@@ -1241,12 +1315,16 @@ void parse_TCP(struct DNSdataControl *d)
 #endif
 	//hexdump("packet: ", d->dns.portaddr, d->dns.portaddrlen*2);
 
-	HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr, d->dns.portaddrlen*2, found);
-	tcp_n_hash_find++;
+	found = NULL;
+	found_syn = NULL;
+	if (d->enable_tcp_state) {
+		HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr, d->dns.portaddrlen*2, found);
+		tcp_n_hash_find++;
+	}
 	if (found != NULL && found->ts_fin > 0) {
 	       if (d->dns.ts < found->ts_fin + tcpbuff_MSL) {
 			// Ignore all
-			if (d->debug & FLAG_DEBUG_TCP_IGNORED)
+			if (d->debug & FLAG_DEBUG_TCP)
 				tcpbuff_debug_dump(found, d, "FinIn120ignored", TcpStr, datalen);
 			found->ts_syn = 0;
 			return;
@@ -1254,6 +1332,8 @@ void parse_TCP(struct DNSdataControl *d)
 			found->ts_fin = 0;
 			if (d->debug & FLAG_DEBUG_TCP)
 				tcpbuff_debug_dump(found, d, "FinClear", TcpStr, datalen);
+			tcpbuff_remove(found);
+			found = NULL;
 		}
 	}
 	if (d->debug & FLAG_DEBUG_TCP) {
@@ -1268,6 +1348,7 @@ void parse_TCP(struct DNSdataControl *d)
 	}
 
 	if (syn) {
+		if (found) { tcpbuff_remove(found); found = NULL; }
 		// Parse TCP_Options
 		d->ParsePcapCounter._tcpbuff_syn++;
 		d->dns.tcp_mss = 0;
@@ -1291,32 +1372,43 @@ void parse_TCP(struct DNSdataControl *d)
 				break;
 			}
 		}
-		t = found;
-		if (t == NULL) {
-			if (tcp_n_hash_add - tcp_n_hash_del >= tcpbuff_gc_lim)
-				tcpbuff_gc(d->dns.ts, d->debug);
-			t = malloc(sizeof(struct TCPbuff));
-			if (t == NULL) err(1, "malloc TCPbuff");
-			memset(t, 0, sizeof(struct TCPbuff));
-			int keylen = d->dns.portaddrlen*2;
-			t->portaddrlen = d->dns.portaddrlen;
-			memcpy(t->portaddr, d->dns.portaddr, d->dns.portaddrlen*2);
-			HASH_ADD(hh, tcpbuff_hash, portaddr, keylen, t);
-			tcp_n_hash_add++;
+		if (d->debug & FLAG_DEBUG_TCP)
+			printf("#INFO_TCP:SYN_Record:ts=%ld flag=%s datalen=%d\n", d->dns.ts, TcpStr, datalen);
+		if (d->enable_tcpsyn_callback) {
+			d->dns._id = flag;
+			d->dns.datatype = DATATYPE_TCPSYN;
+			(void)(d->callback)(d, CALLBACK_TCPSYN);
 		}
+		if (datalen > 0) { parse_TCP_data(d, datalen, t, 1); }
+		if (d->enable_tcp_state) {
+		t = tcpbuff_get(d->dns.ts);
+		memset(t, 0, sizeof(struct TCPbuff));
+		t->valid = 1;
+		int keylen = d->dns.portaddrlen*2;
+		t->portaddrlen = d->dns.portaddrlen;
+		memcpy(t->portaddr, d->dns.portaddr, d->dns.portaddrlen*2);
+		tcp_n_hash_add++;
 		t->ts_last = t->ts_syn = d->dns.ts;
 		t->alen = d->dns.alen;
 		t->datalen = 0;
 		t->count = 1;
 		t->tcp_mss = d->dns.tcp_mss;
 		t->tcp_fastopen = d->dns.tcp_fastopen;
-		t->tcp_delay = 0;
-		if (d->debug & FLAG_DEBUG_TCP)
-			printf("#INFO_TCP:SYN_Record:ts=%ld flag=%s datalen=%d\n", d->dns.ts, TcpStr, datalen);
-		if (datalen > 0) { parse_TCP_data(d, datalen, t, 1); }
+		t->tcp_delay = -1;
+		t->ts_ack = 0;
+		t->tcp_syn_ack_delay = -1;
+		HASH_ADD(hh, tcpbuff_hash, portaddr, keylen, t);
+		if (ack) {
+			HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen*2, found_syn);
+			if (found_syn != NULL && found_syn->ts_ack == 0) {
+				found_syn->ts_ack = d->dns.ts;
+				found_syn->tcp_syn_ack_delay = d->dns.ts - found_syn->ts_syn;
+			}
+		}
+		}
 		return;
 	}
-	if (found == NULL) {
+	if (d->enable_tcp_state == 0 || found == NULL) {
 		if (flag == 0x10 && datalen == 0) return;
 		if (datalen > 0) {
 			 parse_nosyn_data(d, datalen);
@@ -1325,20 +1417,27 @@ void parse_TCP(struct DNSdataControl *d)
 			printf("#INFO_TCP:NoSYN:ts=%ld flag=%s datalen=%d\n", d->dns.ts, TcpStr, datalen);
 			hexdump(" Packet:\n", d->dns._ip, d->dns.iplen);
 		}
-		if (fin) goto othersidefin;
+		if (fin && d->enable_tcp_state) goto othersidefin;
 		return;
+	}
+	if (ack) {
+		HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen*2, found_syn);
+		if (found_syn != NULL && found_syn->ts_ack == 0) {
+			found_syn->ts_ack = d->dns.ts;
+			found_syn->tcp_syn_ack_delay = d->dns.ts - found_syn->ts_syn;
+		}
 	}
 	if (d->debug & FLAG_DEBUG_TCP) printf("#INFO_TCP:ACK:ts=%ld partial=%d flag=%s found=%p datalen=%d dnslen=%d\n", d->dns.ts, d->dns.partial, TcpStr, found, found->datalen, datalen);
 	found->ts_last = d->dns.ts;
 	if (d->debug & FLAG_DEBUG_256) {
-		if (found->ts_syn != 0 && found->tcp_delay == 0) {
+		if (found->ts_syn != 0 && found->tcp_delay < 0) {
 			found->tcp_delay = d->dns.ts - found->ts_syn;
 			if (found->tcp_delay <= 0) found->tcp_delay = -1;
 		}
 	} else
 	if (datalen > 0 && found->ts_first_data == 0) {
 		found->ts_first_data = d->dns.ts;
-		if (found->ts_syn != 0 && found->tcp_delay == 0) {
+		if (found->ts_syn != 0 && found->tcp_delay <= 0) {
 			found->tcp_delay = d->dns.ts - found->ts_syn;
 			if (found->tcp_delay <= 0) found->tcp_delay = -1;
 		}
@@ -1368,7 +1467,7 @@ void parse_TCP(struct DNSdataControl *d)
 		found->count = 0;
 		found->tcp_mss = 0;
 		found->tcp_fastopen = 0;
-		found->tcp_delay = 0;
+		found->tcp_delay = -1;
 othersidefin:
 		HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen*2, found);
 		tcp_n_hash_find++;
@@ -1380,7 +1479,7 @@ othersidefin:
 			found->count = 0;
 			found->tcp_mss = 0;
 			found->tcp_fastopen = 0;
-			found->tcp_delay = 0;
+			found->tcp_delay = -1;
 		}
 		return;
 	}
@@ -1521,7 +1620,8 @@ void parse_L3(struct DNSdataControl *d)
 				d->dns._transport_type = T_TCP;
 				parse_TCP(d);
 				return;
-			} else {
+			} else
+			if (ip_off == 0x2000) {
 				d->ParsePcapCounter._tcp4_frag++;
 				d->dns._transport_type = T_TCP_FRAG;
 				d->dns._fragSize = d->dns.iplen;
@@ -1529,6 +1629,11 @@ void parse_L3(struct DNSdataControl *d)
 #if DEBUG
 				hexdump("IPv4 TCP Fragment: First", d->dns._ip, d->dns.len);
 #endif
+				parse_TCP(d);
+				return;
+			} else {
+				d->ParsePcapCounter._tcp4_frag_next++;
+				// hexdump("IPv4 TCP Fragment: Next", d->dns._ip, d->dns.len);
 				return;
 			}
 		case 1:
@@ -1770,6 +1875,8 @@ int parse_line(struct DNSdataControl* c)
 	char *str;
 	u_char ip_src[16];
 	u_char ip_dst[16];
+	char s_src[INET6_ADDRSTRLEN];
+	char s_dst[INET6_ADDRSTRLEN];
 
 	p = (char *)c->raw;
 	memset(&tm, 0, sizeof(tm));
@@ -1814,7 +1921,7 @@ int parse_line(struct DNSdataControl* c)
 	p += 4;
 	c->dns._fragSize = 0;
 
-	if (c->debug & FLAG_SCANONLY) {
+	if (c->do_scanonly) {
 		if (c->ParsePcapCounter.first_ts == 0) {
 			c->ParsePcapCounter.first_ts = c->dns.ts;
 		}
@@ -1829,13 +1936,13 @@ int parse_line(struct DNSdataControl* c)
 		p = q + 4;
 		q = strchr(p, '/');
 		if (q == NULL) return err_addr;
-		memcpy(c->dns.s_src, p, q - p);
-		c->dns.s_src[q-p] = 0;
-		if (inet_pton(AF_INET, (char *)c->dns.s_src, ip_src) == 1) {
+		memcpy(s_src, p, q - p);
+		s_src[q-p] = 0;
+		if (inet_pton(AF_INET, s_src, ip_src) == 1) {
 			c->dns.af = AF_INET;
 			c->dns.alen = 4;
 		} else
-		if (inet_pton(AF_INET6, (char *)c->dns.s_src, ip_src) == 1) {
+		if (inet_pton(AF_INET6, s_src, ip_src) == 1) {
 			c->dns.af = AF_INET6;
 			c->dns.alen = 16;
 		} else
@@ -1866,7 +1973,7 @@ int parse_line(struct DNSdataControl* c)
 		} else
 			return err_type;
 		r = q;
-		if (c->debug & FLAG_IGNORE_CASE) {
+		if (c->enable_dname_lowercase) {
 			for (i = 0; i < q-p; i++) {
 				c->dns.qname[i] = tolower(p[i]);
 			}
@@ -1922,15 +2029,15 @@ int parse_line(struct DNSdataControl* c)
 		for (r = q - 1; r >= p && *r != ' ' && *r != 0; r--);
 		if (*r != ' ') return err_addr;
 		p = r + 1;
-		memcpy(c->dns.s_src, p, q - p);
-		c->dns.s_src[q-p] = 0;
-		r = strchr(c->dns.s_src, '%');
+		memcpy(s_src, p, q - p);
+		s_src[q-p] = 0;
+		r = strchr(s_src, '%');
 		if (r != NULL) *r = 0;
-		if (inet_pton(AF_INET, c->dns.s_src, ip_src) == 1) {
+		if (inet_pton(AF_INET, s_src, ip_src) == 1) {
 			c->dns.af = AF_INET;
 			c->dns.alen = 4;
 		} else
-		if (inet_pton(AF_INET6, c->dns.s_src, ip_src) == 1) {
+		if (inet_pton(AF_INET6, s_src, ip_src) == 1) {
 			c->dns.af = AF_INET6;
 			c->dns.alen = 16;
 		} else
@@ -1967,7 +2074,7 @@ int parse_line(struct DNSdataControl* c)
 #endif
 			if (q == NULL) return err_qname;
 			len = q-p;
-			if (c->debug & FLAG_IGNORE_CASE) {
+			if (c->enable_dname_lowercase) {
 				for (i = 0; i < len; i++) {
 					c->dns.qname[i] = tolower(p[i]);
 				}
@@ -2072,10 +2179,10 @@ int parse_line(struct DNSdataControl* c)
 			p++;
 			q = strchr(p, ')');
 			if (q != NULL) {
-				memcpy(c->dns.s_dst, p, q - p);
-				c->dns.s_dst[q-p] = 0;
-				if (inet_pton(c->dns.af, (char *)c->dns.s_dst, ip_dst) != 1) {
-					fprintf(stderr, "Unparseable [%s] af=%d\n", c->dns.s_dst, c->dns.af);
+				memcpy(s_dst, p, q - p);
+				s_dst[q-p] = 0;
+				if (inet_pton(c->dns.af, s_dst, ip_dst) != 1) {
+					fprintf(stderr, "Unparseable [%s] af=%d\n", s_dst, c->dns.af);
 					return err_server;
 				}
 				c->dns.p_dst = ip_dst;
@@ -2128,7 +2235,7 @@ int parse_line(struct DNSdataControl* c)
 	c->dns.p_dport = 53;
 	c->ParsePcapCounter._dns_query++;
 
-	if (c->mode & MODE_DO_ADDRESS_CHECK)
+	if (c->do_address_check)
 		if (c->callback(c, CALLBACK_ADDRESSCHECK) == 0) {
 			c->ParsePcapCounter._unknown_ipaddress++;
 			return err_ignored;
@@ -2163,6 +2270,7 @@ int parse_line(struct DNSdataControl* c)
 		c->dns.label[j] = p;
 	}
 	c->ParsePcapCounter._parsed_dnsquery++;
+	c->dns.datatype = DATATYPE_DNS;
 	(void)(c->callback)(c, CALLBACK_PARSED);
 	return 0;
 }
@@ -2287,7 +2395,7 @@ int parse_testdata(struct DNSdataControl* c)
 				err(1, "#BadTestData:line=%d:src/dst IPaddr mismatch:src=%d:prev=%d", c->lineno, alen, c->dns.alen);
 			c->dns.alen = alen;
 			c->dns.portaddrlen = alen+2;
-			strncpy((char *)c->dns.s_src, q, INET6_ADDRSTRLEN);
+			c->dns.af = (alen == 4) ? AF_INET : AF_INET6;
 		} else if (strcmp((char *)p, "dst") == 0) {
 			alen = parse_testdata_addr(q, c->dns.portaddr+18);
 			if (alen <= 0)
@@ -2298,7 +2406,7 @@ int parse_testdata(struct DNSdataControl* c)
 				memcpy(c->dns.portaddr+6, c->dns.portaddr+18, 6);
 			c->dns.alen = alen;
 			c->dns.portaddrlen = alen+2;
-			strncpy((char *)c->dns.s_dst, q, INET6_ADDRSTRLEN);
+			c->dns.af = (alen==4)?AF_INET:AF_INET6;
 		} else if (strcmp((char *)p, "query") == 0) {
 			p = strchr(q, '/');
 			if (p == NULL) {
@@ -2373,7 +2481,7 @@ int parse_testdata(struct DNSdataControl* c)
 	c->dns.p_dst = c->dns.portaddr+c->dns.portaddrlen+2;
 	c->dns.p_sport = c->dns.portaddr[0]*256+c->dns.portaddr[1];
 	c->dns.p_dport = c->dns.portaddr[alen+2]*256+c->dns.portaddr[alen+3];
-	(void)(c->callback)(c, CALLBACK_ADDRESSCHECK);
+	c->dns.datatype = DATATYPE_DNS;
 	(void)(c->callback)(c, CALLBACK_PARSED);
 	return 0;
 }
@@ -2495,7 +2603,7 @@ int parse_l2(struct pcap_header *ph, struct DNSdataControl* c)
 		c->ParsePcapCounter.first_ts = c->dns.ts;
 	}
 	c->ParsePcapCounter.last_ts = c->dns.ts;
-	if ((c->debug & FLAG_SCANONLY) == 0)
+	if (c->do_scanonly == 0)
 		parse_L3(c);
 	c->ParsePcapCounter._pcap++;
 	return 0;
@@ -2856,3 +2964,6 @@ void print_rusage()
 	//PRINT_XX(usage, ru_nvcsw);
 	//PRINT_XX(usage, ru_nivcsw);
 }
+
+char *PcapParseC_datatype[] = { "DNS", "TCPSYN", NULL };
+
