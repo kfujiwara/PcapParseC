@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.167 2024/04/18 10:11:50 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.172 2024/05/10 10:04:07 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -18,14 +18,8 @@
 #include <sys/types.h>
 #endif
 #include <stdio.h>
-#ifdef HAVE_STDLIB_H
-#include <stdlib.h>
-#endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
-#endif
-#ifdef HAVE_FCNTL_H
-#include <fcntl.h>
 #endif
 #ifdef HAVE_TIME_H
 #include <time.h>
@@ -33,29 +27,14 @@
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
 #endif
-#ifdef HAVE_STRING_H
-#include <string.h>
-#endif
 #ifdef HAVE_STDARG_H
 #include <stdarg.h>
-#endif
-#ifdef HAVE_STDARG_H
-#include <stdarg.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
 #endif
 #ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
 #endif
-#ifdef HAVE_NETINET_IN_H
-#include <netinet/in.h>
-#endif
 #ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
-#endif
-#ifdef HAVE_STDARG_H
-#include <stdarg.h>
 #endif
 #ifdef HAVE_ERR_H
 #include <err.h>
@@ -186,10 +165,15 @@ static struct print_answer_options {
 	int bit;
 } print_answer_options[] = {
 	{ "RefNS", FLAG_PRINTANS_REFNS },
+	{ "RefDS", FLAG_PRINTANS_REFDS },
 	{ "RefGlue", FLAG_PRINTANS_REFGLUE },
 	{ "AuthSOA", FLAG_PRINTANS_AUTHSOA },
-	{ "ANSWER", FLAG_PRINTANS_ANSWER },
-	{ "INFO", FLAG_PRINTANS_INFO },
+	{ "AnsA", FLAG_PRINTANS_ANSWER_A },
+	{ "AnsAAAA", FLAG_PRINTANS_ANSWER_AAAA },
+	{ "AnsNS", FLAG_PRINTANS_ANSWER_NS },
+	{ "AnsDS", FLAG_PRINTANS_ANSWER_DS },
+	{ "AnsCNAME", FLAG_PRINTANS_ANSWER_CNAME },
+	{ "AnsPTR", FLAG_PRINTANS_ANSWER_PTR },
 	{ "ALLRR", FLAG_PRINTANS_ALLRR },
 	{ "EDNSSIZE", FLAG_PRINTEDNSSIZE },
 	{ "FLAG", FLAG_PRINTFLAG },
@@ -540,9 +524,6 @@ void print_bind9log(struct DNSdataControl *d)
 		d->dns.str_rcode == NULL ? "":d->dns.str_rcode,
 		additional, additional2);
 	}
-	if (do_print_dns_answer > 1 && (d->mode & MODE_PARSE_ANSWER)) {
-		print_dns_answer(d);
-	}
 }
 
 int _comp4(const void *p1, const void *p2)
@@ -569,7 +550,7 @@ void print_csv(struct DNSdataControl *d)
 		_do = 1;
 	}
 	if (print_filename) { printf("%s,", d->filename); }
-#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,node,datatype,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,str_rcode,tc,aa,qdcount,ancount,nscount,arcount,additionaldnssecrrs,dnslen,transport,FragSize,ip_df,tcp_dnscount,tcp_fastopen,tcp_mss,tcp_delay,tcp_syn_ack_delay,soa_ttl,soa_dom,ans_ttl,cname_ttl,cname,a_aaaa,"
+#define CSV_STR "timestamp,s_adr,s_port,d_adr,d_port,node,datatype,qname,qclass,qtype,id,qr,rd,edns0,edns0len,do,error,rcode,str_rcode,tc,aa,qdcount,ancount,nscount,arcount,additionaldnssecrrs,dnslen,transport,FragSize,ip_df,tcp_dnscount,tcp_fastopen,tcp_mss,tcp_delay,tcp_syn_ack_delay,soa_ttl,soa_dom,ans_ttl,cname_ttl,cname,a_aaaa"
 	printf("%d.%06d,"       // timestamp
 		"%s,%d,%s,%d,"	// source, dest
 		"%s,"		// anycast node
@@ -639,9 +620,9 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 	    if (both_direction) {
 		if (src_hash != NULL) {
 			HASH_FIND(hh, src_hash, d->dns.portaddr, d->dns.portaddrlen, is1);
-			if (is1 == NULL) HASH_FIND(hh, src_hash, d->dns.portaddr, d->dns.alen, is1);
+			if (is1 == NULL) HASH_FIND(hh, src_hash, d->dns.portaddr+2, d->dns.alen, is1);
 			HASH_FIND(hh, src_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen, id1);
-			if (id1 == NULL) HASH_FIND(hh, src_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen, id1);
+			if (id1 == NULL) HASH_FIND(hh, src_hash, d->dns.portaddr+d->dns.portaddrlen+2, d->dns.alen, id1);
 			if (is1 == NULL && id1 == NULL) return 0;
 			i1 = (is1 != NULL) ? is1 : id1;
 		} else {
@@ -649,9 +630,9 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 		}
 		if (dst_hash != NULL) {
 			HASH_FIND(hh, dst_hash, d->dns.portaddr, d->dns.portaddrlen, is2);
-			if (is2 == NULL) HASH_FIND(hh, dst_hash, d->dns.portaddr, d->dns.alen, is2);
+			if (is2 == NULL) HASH_FIND(hh, dst_hash, d->dns.portaddr+2, d->dns.alen, is2);
 			HASH_FIND(hh, dst_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen, id2);
-			if (id2 == NULL) HASH_FIND(hh, dst_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen, id2);
+			if (id2 == NULL) HASH_FIND(hh, dst_hash, d->dns.portaddr+d->dns.portaddrlen+2, d->dns.alen, id2);
 			if (is2 == NULL && id2 == NULL) return 0;
 			i2 = (is2 != NULL) ? is2 : id2;
 
@@ -674,13 +655,13 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 	    } else {
 		if (src_hash != NULL) {
 			HASH_FIND(hh, src_hash, d->dns.portaddr, d->dns.portaddrlen, is1);
-			if (is1 == NULL) HASH_FIND(hh, src_hash, d->dns.portaddr, d->dns.alen, is1);
+			if (is1 == NULL) HASH_FIND(hh, src_hash, d->dns.portaddr+2, d->dns.alen, is1);
 			if (is1 == NULL) return 0;
 			is1->count++;
 		}
 		if (dst_hash != NULL) {
 			HASH_FIND(hh, dst_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen, id2);
-			if (id2 == NULL) HASH_FIND(hh, dst_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen, id2);
+			if (id2 == NULL) HASH_FIND(hh, dst_hash, d->dns.portaddr+d->dns.portaddrlen+2, d->dns.alen, id2);
 			if (id2 == NULL) return 0;
 			id2->count++;
 		}
@@ -769,11 +750,12 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 	}
 	if (print_queries_csv) print_csv(d);
 	if (print_queries_bind9) print_bind9log(d);
-	count_printed++;
-	if (do_print_dns_answer > 1 && (d->mode & MODE_PARSE_ANSWER))
+	if (do_print_dns_answer > 1 && (d->mode & MODE_PARSE_ANSWER)) {
 		print_dns_answer(d);
+	}
 	if (do_print_hexdump)
 		hexdump("", d->dns.dns, d->dns.dnslen);
+	count_printed++;
 	return 0;
 }
 
@@ -999,7 +981,7 @@ void usage(int c)
 "       TC,noTC,RCODE0,noRCODE0,ANCOUNT0,noANCOUNT0,noREF,REF (response)\n"
 "       QNAME (inverse -n/-N options)\n"
 "-p XX,XX,XX : Print DNS answer options\n"
-"       RefNS,RefGlue,AuthSOA,ANSWER,INFO,ALLRR\n"
+"       RefNS,RefGlue,RefDS,AuthSOA,AnsA,AnsAAAA,AnsNS,AnsDS,AnsCNAME,AnsPTR,ALLRR\n"
 "       EDNSSIZE/FLAG/DNSLEN... print edns0udpsize,flag,dnslen on DNS query/answer\n"
 "-G size: print if DNS size is greater or equal to 'size'\n"
 "-L size: print if DNS size is smaller or equal to 'size'\n"
@@ -1136,20 +1118,19 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 	int print_answer_option = 0;
 	double t;
 
-	c->enable_dname_lowercase = 0;
-	c->enable_bind9log_style = 1;
+	c->getdname_options = 0;
 
 	while ((ch = getopt_env(argc, argv, "a:b:t:T:q:9BCYD:AQL:o:hvf:l:O:cgI:Jr:XZG:x:BXp:q:n:N:s:yPRSi", env)) != -1) {
 	// printf("getopt: ch=%c optarg=%s\n", ch, optarg);
 	switch (ch) {
-	case 'P': c->enable_bind9log_style = 0; break;
+	case 'P': c->getdname_options |= GET_DNAME_IgnoreErrorChar; break;
 	case 'B': both_direction = 1; break;
 	case 'n': register_qname_hash(optarg); break;
 	case 'N': load_qname_hash(optarg); break;
 	case 'a': register_ipaddr_port_hash(optarg, &src_hash); break;
 	case 'b': register_ipaddr_port_hash(optarg, &dst_hash); break;
-	case 'C': print_queries_csv = 1; break;
-	case '9': print_queries_bind9++; c->enable_bind9log_style = 1; break;
+	case 'C': print_queries_csv++; break;
+	case '9': print_queries_bind9++; break;
 	case 'q':
 		counter.interval = strtol(optarg, NULL, 10);
 		if (counter.interval == 0 && errno != 0) { usage('L'); }
@@ -1184,7 +1165,7 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 		if (select_rd<-1 || select_rd>1 || (select_rd==0 && *optarg != '0'))
 			usage(ch);
 		break;
-	case 'Z': flag_print_labels = 1; break;
+	case 'Z': flag_print_labels++; break;
 	case 'X': do_print_hexdump = 1; break;
  	case 'G': flag_greater_than = strtol(optarg, NULL, 10);
 			if (flag_greater_than == 0 && errno != 0) { usage(ch); }; break;	
@@ -1198,7 +1179,7 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 		if (t >= 0) { print_tcp_delay_longer_than = t * 1000; }
 		else { print_tcp_delay_shorter_than = -t * 1000; }
 		break;
-	case 'i': c->enable_dname_lowercase = 1; break;
+	case 'i': c->getdname_options |= GET_DNAME_LOWERCASE; break;
 	case 'S': print_tcpsyn = 1; break;
 	case 'z': c->enable_tcp_state = 1; break;
 	case '?':
@@ -1208,11 +1189,12 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 
 int main(int argc, char *argv[])
 {
-	char *p;
-	int ret;
-	char *env;
+	int ret, i;
+	char *env, *p, *q;
 	struct DNSdataControl c;
 	char buff2[1024];
+	char csv_str[] = CSV_STR;
+	char *sep = ",";
 
 	memset(&c, 0, sizeof(c));
 	env = getenv(ENVNAME);
@@ -1229,11 +1211,16 @@ int main(int argc, char *argv[])
 		c.mode |= MODE_PARSE_QUERY;
 	if (print_query_counter == 0 && print_queries_csv == 0 && print_queries_bind9 == 0) {
 		print_queries_bind9 = 1;
-		c.enable_bind9log_style = 1;
 	}
-	if (flag_print_labels) {
-		if (print_queries_csv) {
-			printf(CSV_STR "\n");
+	if (flag_print_labels != 0 && print_queries_csv != 0) {
+		printf("%s\n", csv_str);
+		if (flag_print_labels > 1) {
+			i = 1;
+			p = strtok_r(csv_str, sep, &q);
+			while (p != NULL) {
+				printf("\t%d,%s\n", i++, p);
+				p = strtok_r(NULL, sep, &q);
+			}
 		}
 	}
 	if (data_start != 0 && data_time_length != 0)

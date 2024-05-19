@@ -7,29 +7,14 @@
 #ifdef HAVE_STDLIB_H
 #include <stdlib.h>
 #endif
-#ifdef HAVE_UNISTD_H
-#include <unistd.h>
-#endif
-#ifdef HAVE_FCNTL_H
-#include <fcntl.h>
-#endif
-#ifdef HAVE_TIME_H
-#include <time.h>
-#endif
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
-#endif
-#ifdef HAVE_STDARG_H
-#include <stdarg.h>
 #endif
 #ifdef HAVE_CTYPE_H
 #include <ctype.h>
 #endif
 #ifdef HAVE_STRING_H
 #include <string.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
 #endif
 
 #include "mytool.h"
@@ -204,3 +189,23 @@ void skipcomma(char *src, char **next, int num, int *error, int errorcode)
 		*error = errorcode;
 	*next = p;
 }
+
+/*
+ hexdump for debug
+ */
+
+void hexdump(char *msg, u_char *data, int len)
+{
+	int addr = 0;
+	if (msg != NULL)
+		printf("%s", msg);
+	while(len-- > 0) {
+		if ((addr % 16) == 0) {
+			printf("%s%04x ", (addr!=0)?"\n":"", addr);
+		}
+		printf("%02x ", *data++);
+		addr++;
+	}
+	printf("\n");
+}
+

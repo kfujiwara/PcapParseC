@@ -13,10 +13,15 @@ AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 
 # Checks for header files.
-AC_CHECK_HEADERS([arpa/inet.h time.h fcntl.h netinet/in.h stdlib.h sys/socket.h unistd.h string.h stdarg.h errno.h ctype.h apr.h math.h string.h err.h sys/endian.h math.h maxminddb.h apr_hash.h sys/stat.h maxminddb.h assert.h sys/resource.h])
+AC_CHECK_HEADERS([maxminddb.h arpa/inet.h assert.h ctype.h err.h errno.h netinet/in.h stdarg.h stdio.h stdlib.h string.h sys/resource.h sys/socket.h sys/stat.h sys/time.h sys/types.h time.h unistd.h])
 
 AC_CHECK_PROG(fetch, wget)
 AC_CHECK_LIB(maxminddb,MMDB_open)
+#AC_SEARCH_LIBS ([MMDB_open],[libmaxminddb], [
+#  AC_MSG_ERROR([unable to find the MMDB_open() function])
+#])
+# Checks for library functions.
+#AC_FUNC_MALLOC
 AC_CHECK_FUNCS([memset strdup inet_pton err sqrt])
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

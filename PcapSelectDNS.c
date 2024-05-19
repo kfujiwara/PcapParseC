@@ -1,5 +1,5 @@
 /*
-	$Id: PcapSelectDNS.c,v 1.12 2022/07/20 05:48:28 fujiwara Exp $
+	$Id: PcapSelectDNS.c,v 1.13 2024/05/09 15:15:28 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -14,51 +14,27 @@
 
 #include "config.h"
 
+#include <stdio.h>
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
-#include <stdio.h>
 #ifdef HAVE_STDLIB_H
-#include <stdlib.h>
-#endif
-#ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
-#ifdef HAVE_FCNTL_H
-#include <fcntl.h>
-#endif
-#ifdef HAVE_TIME_H
-#include <time.h>
+#ifdef HAVE_CTYPE_H
+#include <ctype.h>
 #endif
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
 #endif
-#ifdef HAVE_STDARG_H
-#include <stdarg.h>
+#ifdef HAVE_ERR_H
+#include <err.h>
 #endif
 #ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
-#endif
-#ifdef HAVE_NETINET_IN_H
-#include <netinet/in.h>
 #endif
 #ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
-#endif
-#ifdef HAVE_STDARG_H
-#include <stdarg.h>
-#endif
-#ifdef HAVE_STRING_H
-#include <string.h>
-#endif
-#ifdef HAVE_MATH_H
-#include <math.h>
-#endif
-#ifdef HAVE_ERR_H
-#include <err.h>
 #endif
 
 #include "ext/uthash.h"

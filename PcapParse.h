@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.102 2024/04/17 07:27:58 fujiwara Exp $
+	$Id: PcapParse.h,v 1.105 2024/05/10 09:44:04 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -229,8 +229,7 @@ struct DNSdataControl {
   struct DNSdata dns;
   int enable_tcp_state;
   int enable_tcpsyn_callback;
-  int enable_dname_lowercase;
-  int enable_bind9log_style;
+  int getdname_options;
   int do_address_check;
   int do_scanonly;
   int mode;
@@ -252,15 +251,16 @@ char *parse_pcap_error(int errorcode);
 void print_dns_answer(struct DNSdataControl *);
 void dump_tcpbuf();
 void tcpbuff_statistics();
+extern char *PcapParseC_datatype[];
 
-unsigned int get_uint16(struct DNSdata *d);
-unsigned long long int get_uint32(struct DNSdata *d);
-int get_dname(struct DNSdata *d, char *o, int o_len, int mode, struct case_stats *s);
 void hexdump(char *msg, u_char *data, int len);
 void Print_PcapStatistics(struct DNSdataControl *d);
 
-#define GET_DNAME_NO_COMP 1
+#define	GET_DNAME_NO_COMP 1
 #define GET_DNAME_NO_SAVE 2
+#define	GET_DNAME_SEPARATE 4
+#define	GET_DNAME_IgnoreErrorChar 0x100
+#define GET_DNAME_LOWERCASE 0x200
 
 #define INPUT_TYPE_NONE 0
 #define INPUT_TYPE_PCAP 1
@@ -285,15 +285,20 @@ void Print_PcapStatistics(struct DNSdataControl *d);
 #define FLAG_DEBUG_256			0x100
 #define FLAG_DEBUG_512			0x200
 #define FLAG_SCANONLY			0x400
-#define FLAG_PRINTANS_ALLRR		0x800
-#define FLAG_PRINTANS_REFNS		0x1000
-#define FLAG_PRINTANS_REFGLUE		0x2000
-#define FLAG_PRINTANS_AUTHSOA		0x4000
-#define FLAG_PRINTANS_INFO		0x8000
-#define FLAG_PRINTANS_ANSWER		0x10000
-#define FLAG_PRINTEDNSSIZE		0x20000
-#define FLAG_PRINTFLAG			0x40000
-#define FLAG_PRINTDNSLEN		0x80000
+#define FLAG_PRINTEDNSSIZE		0x800
+#define FLAG_PRINTFLAG			0x1000
+#define FLAG_PRINTDNSLEN		0x2000
+#define FLAG_PRINTANS_ALLRR		0x10000
+#define FLAG_PRINTANS_REFNS		0x20000
+#define FLAG_PRINTANS_REFDS		0x40000
+#define FLAG_PRINTANS_REFGLUE		0x80000
+#define FLAG_PRINTANS_AUTHSOA		0x100000
+#define FLAG_PRINTANS_ANSWER_PTR	0x200000
+#define FLAG_PRINTANS_ANSWER_A		0x400000
+#define FLAG_PRINTANS_ANSWER_AAAA	0x800000
+#define FLAG_PRINTANS_ANSWER_NS		0x1000000
+#define FLAG_PRINTANS_ANSWER_DS		0x2000000
+#define FLAG_PRINTANS_ANSWER_CNAME	0x4000000
 
 #define	CALLBACK_PARSED		1
 #define	CALLBACK_ADDRESSCHECK	2
@@ -311,7 +316,7 @@ enum {
 	ParsePcap_ERROR_EmptyMerge = -8,
 	ParsePcap_ERROR_Memory = -9,
 	ParsePcap_EOF = -10,
-	PcapPArse_ForceClose = -11,
+	ParsePcap_ForceClose = -11,
 
 	ParsePcap_IPv4ChecksumError = 1,
 	ParsePcap_UDPchecksumError = 2,

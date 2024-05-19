@@ -12,3 +12,4 @@ long long gethexint(char *src, char **next, int *error, int errorcode);
 double getfloat(char *src, char **next, int *error, int errorcode);
 void getstring(char *src, char **next, int *error, int errorcode, char *str, int len);
 void skipcomma(char *src, char **next, int num, int *error, int errorcode);
+void hexdump(char *msg, u_char *data, int len);
