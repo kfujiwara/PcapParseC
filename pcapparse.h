@@ -1,5 +1,5 @@
 /*
-	$Id: PcapParse.h,v 1.105 2024/05/10 09:44:04 fujiwara Exp $
+	$Id: pcapparse.h,v 1.123 2025/05/30 08:19:43 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -34,6 +34,8 @@
 
 #define	PcapParse_DNAMELEN	1280
 #define	PcapParse_LABELS		32
+#define	PcapParse_nSubstring		5
+#define	PcapParse_Naddr		16
 
 #define	PcapParse_tld	label[0]
 
@@ -66,6 +68,7 @@ struct DNSdata
   u_char proto;
   u_char _transport_type; /* T_UDP, T_UDP_FRAG, T_TCP, T_TCP_FRAG */
   u_char tcp_fastopen; // FastOpen
+  unsigned int checksum0;
   int64_t tcp_delay; // Round Trip Time from TCP  ... data - SYN (must > 0)
   int64_t tcp_syn_ack_delay; // ACK - SYN (must >= 0)
   int tcp_mss;         // MSS valuedata
@@ -80,21 +83,26 @@ struct DNSdata
   u_int32_t tv_usec;
   int64_t ts;
   char qname[PcapParse_DNAMELEN];
+  int qnamelen;
   struct case_stats case_stats;
   char qnamebuf[PcapParse_DNAMELEN];
   char *label[PcapParse_LABELS];
+  u_char labellen[PcapParse_LABELS];
+  char *substring[PcapParse_nSubstring];
+  int substringlen[PcapParse_nSubstring];
   int nlabel;
+  int nsubstring;
   int qtype;
   int qclass;
   u_int16_t edns0udpsize;
   u_int16_t _fragSize;
-  u_char _edns0;
-  u_char _ednsver;
+  u_short _edns0;
+  u_short _ednsver;
   u_short _edns_rdlen;
   u_short _edns_cookie_len;
-  u_char _edns_numopts;
-  u_char _do;
-  u_char _edns_nsid;
+  u_short _edns_numopts;
+  u_short _do;
+  u_short _edns_nsid;
   u_char _edns_nsid_buff[257];
   u_short _edns_nsid_bufflen;
   u_char _edns_reserved;
@@ -113,6 +121,8 @@ struct DNSdata
   u_char _edns_keytag;
   u_char _edns_keytag_4a5c;
   u_char _edns_keytag_4f66;
+  u_char _edns_keytag_9728;
+  u_char _edns_keytag_other;
   u_char _edns_unassigned;
   u_char _edns_future;
   u_char _edns_experimental;
@@ -128,6 +138,7 @@ struct DNSdata
   u_char _flag1;
   u_char _flag2;
   u_char _qr;
+  u_char IPaddrUpdated;
   int _qdcount;
   int _ancount;
   int _nscount;
@@ -151,9 +162,9 @@ struct DNSdata
   int cname_ttl;
   int answer_ttl;  /* Valid if debug & FLAG_MODE_PARSE_ANSWER
       -1 ... _rcode == 1 or _rcode == 2 or ancount == 0 or another error */
-  u_char ans_v4[16][4];
+  u_char ans_v4[PcapParse_Naddr][4];
   int n_ans_v4;
-  u_char ans_v6[16][16];
+  u_char ans_v6[PcapParse_Naddr][16];
   int n_ans_v6;
   u_char cnamelist[4096];
 };
@@ -194,6 +205,8 @@ struct PcapStatistics
 	int _ipv6_unknownfragment;
 	int _proto_mismatch;
 	int _ipv4_headerchecksumerror;
+	int _ipv4_protochecksumerror;
+	int _ipv6_protochecksumerror;
 	int _udp_checksumerror;
 	int _before_checking_dnsheader;
 	int _dns_query;
@@ -222,15 +235,17 @@ struct DNSdataControl {
   int max_node_name;
   int input_type;
   char *filename;
+  long long open_time;
+  size_t file_size;
   char letter;
   char node[9];
-  int nodeid;
+  int current_nodeid;
+  char *current_nodename;
   struct PcapStatistics ParsePcapCounter;
   struct DNSdata dns;
   int enable_tcp_state;
   int enable_tcpsyn_callback;
   int getdname_options;
-  int do_address_check;
   int do_scanonly;
   int mode;
   int debug;
@@ -238,16 +253,22 @@ struct DNSdataControl {
   int linktype;
   int caplen;
   int lineno;
+  int print_answer_options;
+#ifdef IPV6_PREFIX_HASH  
+  struct ipv6_prefix_hash *v6hash;
+#else
+  void *v6hash;  // for dummy
+#endif
   u_char *raw;
   int rawlen;
   u_char *l2;
 };
 
-int parse_pcap(char *file, struct DNSdataControl*d, int pass);
-int _parse_pcap(FILE *fp, struct DNSdataControl* d, int pass);
+int parse_file(char *file, struct DNSdataControl*d, int pass);
+int _parse_file(FILE *fp, struct DNSdataControl* d, int pass);
 int add_node_name(struct DNSdataControl *d, char *node);
 char *get_node_name(struct DNSdataControl *d, int nodeid);
-char *parse_pcap_error(int errorcode);
+char *parse_file_error(int errorcode);
 void print_dns_answer(struct DNSdataControl *);
 void dump_tcpbuf();
 void tcpbuff_statistics();
@@ -272,37 +293,36 @@ void Print_PcapStatistics(struct DNSdataControl *d);
 #define MODE_PARSE_ANSWER	2
 #define	MODE_ANSWER_TTL_CNAME_PARSE	4
 #define	MODE_IGNOREERROR	8
-#define	MODE_IGNORE_UDP_CHECKSUM_ERROR	16
+#define	MODE_IGNORE_CHECKSUM_ERROR	16
+#define	MODE_FIX_IPV4ADDR	32
 
 #define FLAG_DUMP 1
 #define FLAG_INFO 2
 #define FLAG_DEBUG_TCP 4
 #define FLAG_DEBUG_UNKNOWNPROTOCOL	8
-//#define FLAG_IGNORE_CASE	0x10
-//#define FLAG_BIND9LOG	0x20
-//#define FLAG_DEBUG_TCP_IGNORED	0x40
-//#define FLAG_DEBUG_TCP_GC		0x80
+#define FLAG_DEBUG_JSON			16
 #define FLAG_DEBUG_256			0x100
 #define FLAG_DEBUG_512			0x200
 #define FLAG_SCANONLY			0x400
-#define FLAG_PRINTEDNSSIZE		0x800
-#define FLAG_PRINTFLAG			0x1000
-#define FLAG_PRINTDNSLEN		0x2000
-#define FLAG_PRINTANS_ALLRR		0x10000
-#define FLAG_PRINTANS_REFNS		0x20000
-#define FLAG_PRINTANS_REFDS		0x40000
-#define FLAG_PRINTANS_REFGLUE		0x80000
-#define FLAG_PRINTANS_AUTHSOA		0x100000
-#define FLAG_PRINTANS_ANSWER_PTR	0x200000
-#define FLAG_PRINTANS_ANSWER_A		0x400000
-#define FLAG_PRINTANS_ANSWER_AAAA	0x800000
-#define FLAG_PRINTANS_ANSWER_NS		0x1000000
-#define FLAG_PRINTANS_ANSWER_DS		0x2000000
-#define FLAG_PRINTANS_ANSWER_CNAME	0x4000000
+
+// Control->print_answer_options
+#define _PRINT_EDNSSIZE		0x1
+#define _PRINT_FLAG			0x2
+#define _PRINT_DNSLEN		0x4
+#define _PRINTANS_ALLRR		0x10000
+#define _PRINTANS_REFNS		0x20000
+#define _PRINTANS_REFDS		0x40000
+#define _PRINTANS_REFGLUE		0x80000
+#define _PRINTANS_AUTHSOA		0x100000
+#define _PRINTANS_ANSWER_PTR	0x200000
+#define _PRINTANS_ANSWER_A		0x400000
+#define _PRINTANS_ANSWER_AAAA	0x800000
+#define _PRINTANS_ANSWER_NS		0x1000000
+#define _PRINTANS_ANSWER_DS		0x2000000
+#define _PRINTANS_ANSWER_CNAME	0x4000000
 
 #define	CALLBACK_PARSED		1
-#define	CALLBACK_ADDRESSCHECK	2
-#define	CALLBACK_TCPSYN		3
+#define	CALLBACK_TCPSYN		2
 
 enum {
 	ParsePcap_NoError = 0,
@@ -343,3 +363,7 @@ extern char *PcapParseC_datatype[];
 
 void print_rusage(void);
 
+void inc_ipv_proto_counter(struct DNSdataControl *c);
+void fixup_portaddr(struct DNSdataControl *c);
+void prepare_dns_labels(struct DNSdataControl *c);
+void prepare_dns_substring(struct DNSdataControl *c);

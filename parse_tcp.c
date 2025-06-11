@@ -1,5 +1,5 @@
 /*
-	$Id: parse_tcp.c,v 1.4 2024/05/09 15:15:28 fujiwara Exp $
+	$Id: parse_tcp.c,v 1.8 2025/05/01 10:06:07 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -12,16 +12,15 @@
 */
 
 
-#include "config.h"
 
 #include <stdio.h>
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
 
 #include "ext/uthash.h"
+
+#include "config.h"
 #include "mytool.h"
-#include "PcapParse.h"
+#include "pcapparse.h"
 #include "parse_int.h"
 #include "parse_DNS.h"
 
@@ -356,12 +355,7 @@ void parse_TCP(struct DNSdataControl *d)
 	tcpbuff_last_ts = d->dns.ts;
 	d->dns.p_sport = d->dns.protoheader[0] * 256 + d->dns.protoheader[1];
 	d->dns.p_dport = d->dns.protoheader[2] * 256 + d->dns.protoheader[3];
-	if (d->do_address_check) {
-		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
-			d->ParsePcapCounter._unknown_ipaddress++;
-			return;
-		}
-	}
+
 	if ((d->dns.alen != 4 && d->dns.alen != 16) ||
 	    ((d->dns.protoheader[12] >> 4) < 5)) {
 		d->dns.error |= ParsePcap_TCPError;
@@ -461,32 +455,31 @@ void parse_TCP(struct DNSdataControl *d)
 			d->dns.datatype = DATATYPE_TCPSYN;
 			(void)(d->callback)(d, CALLBACK_TCPSYN);
 		}
-		if (datalen > 0) { parse_TCP_data(d, datalen, t, 1); }
 		if (d->enable_tcp_state) {
-		t = tcpbuff_get(d->dns.ts);
-		memset(t, 0, sizeof(struct TCPbuff));
-		t->valid = 1;
-		int keylen = d->dns.portaddrlen*2;
-		t->portaddrlen = d->dns.portaddrlen;
-		memcpy(t->portaddr, d->dns.portaddr, d->dns.portaddrlen*2);
-		tcp_n_hash_add++;
-		t->ts_last = t->ts_syn = d->dns.ts;
-		t->alen = d->dns.alen;
-		t->datalen = 0;
-		t->count = 1;
-		t->tcp_mss = d->dns.tcp_mss;
-		t->tcp_fastopen = d->dns.tcp_fastopen;
-		t->tcp_delay = -1;
-		t->ts_ack = 0;
-		t->tcp_syn_ack_delay = -1;
-		HASH_ADD(hh, tcpbuff_hash, portaddr, keylen, t);
-		if (ack) {
-			HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen*2, found_syn);
-			if (found_syn != NULL && found_syn->ts_ack == 0) {
-				found_syn->ts_ack = d->dns.ts;
-				found_syn->tcp_syn_ack_delay = d->dns.ts - found_syn->ts_syn;
+			t = tcpbuff_get(d->dns.ts);
+			memset(t, 0, sizeof(struct TCPbuff));
+			t->valid = 1;
+			int keylen = d->dns.portaddrlen*2;
+			t->portaddrlen = d->dns.portaddrlen;
+			memcpy(t->portaddr, d->dns.portaddr, d->dns.portaddrlen*2);
+			tcp_n_hash_add++;
+			t->ts_last = t->ts_syn = d->dns.ts;
+			t->alen = d->dns.alen;
+			t->datalen = 0;
+			t->count = 1;
+			t->tcp_mss = d->dns.tcp_mss;
+			t->tcp_fastopen = d->dns.tcp_fastopen;
+			t->tcp_delay = -1;
+			t->ts_ack = 0;
+			t->tcp_syn_ack_delay = -1;
+			HASH_ADD(hh, tcpbuff_hash, portaddr, keylen, t);
+			if (ack) {
+				HASH_FIND(hh, tcpbuff_hash, d->dns.portaddr+d->dns.portaddrlen, d->dns.portaddrlen*2, found_syn);
+				if (found_syn != NULL && found_syn->ts_ack == 0) {
+					found_syn->ts_ack = d->dns.ts;
+					found_syn->tcp_syn_ack_delay = d->dns.ts - found_syn->ts_syn;
+				}
 			}
-		}
 		}
 		return;
 	}

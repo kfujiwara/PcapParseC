@@ -1,5 +1,5 @@
 /*
-	$Id: print_dns_answer.c,v 1.3 2024/05/19 03:37:28 fujiwara Exp $
+	$Id: print_dns_answer.c,v 1.5 2025/04/17 06:55:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -15,23 +15,15 @@
 
 #include "config.h"
 
-#ifdef HAVE_CTYPE_H
 #include <ctype.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/socket.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
-#endif
 
 #include "ext/uthash.h"
 
 #include "mytool.h"
-#include "PcapParse.h"
+#include "pcapparse.h"
 #include "parse_int.h"
 #include "parse_DNS.h"
 
@@ -52,17 +44,17 @@ void printans_rr(int section, struct DNSdataControl *d, char *name, int rtype, i
 	char s_src[INET6_ADDRSTRLEN];
 	char s_addr[INET6_ADDRSTRLEN];
 
-	int print_refns = d->debug & FLAG_PRINTANS_REFNS;
-	int print_refds = d->debug & FLAG_PRINTANS_REFDS;
-	int print_refglue = d->debug & FLAG_PRINTANS_REFGLUE;
-	int print_ans_a = d->debug & FLAG_PRINTANS_ANSWER_A;
-	int print_ans_aaaa = d->debug & FLAG_PRINTANS_ANSWER_AAAA;
-	int print_ans_ns = d->debug & FLAG_PRINTANS_ANSWER_NS;
-	int print_ans_ds = d->debug & FLAG_PRINTANS_ANSWER_DS;
-	int print_ans_cname = d->debug & FLAG_PRINTANS_ANSWER_CNAME;
-	int print_ans_ptr = d->debug & FLAG_PRINTANS_ANSWER_PTR;
-	int print_soa = d->debug & FLAG_PRINTANS_AUTHSOA;
-	int print_allrr = d->debug & FLAG_PRINTANS_ALLRR;
+	int print_refns = d->print_answer_options & _PRINTANS_REFNS;
+	int print_refds = d->print_answer_options & _PRINTANS_REFDS;
+	int print_refglue = d->print_answer_options & _PRINTANS_REFGLUE;
+	int print_ans_a = d->print_answer_options & _PRINTANS_ANSWER_A;
+	int print_ans_aaaa = d->print_answer_options & _PRINTANS_ANSWER_AAAA;
+	int print_ans_ns = d->print_answer_options & _PRINTANS_ANSWER_NS;
+	int print_ans_ds = d->print_answer_options & _PRINTANS_ANSWER_DS;
+	int print_ans_cname = d->print_answer_options & _PRINTANS_ANSWER_CNAME;
+	int print_ans_ptr = d->print_answer_options & _PRINTANS_ANSWER_PTR;
+	int print_soa = d->print_answer_options & _PRINTANS_AUTHSOA;
+	int print_allrr = d->print_answer_options & _PRINTANS_ALLRR;
 
 	do_print = print_allrr;
 	if (d->dns._answertype == _ANSWER_REF && 

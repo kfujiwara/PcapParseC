@@ -1,5 +1,5 @@
 /*
-	$Id: pcapinfo.c,v 1.10 2021/04/15 11:49:20 fujiwara Exp $
+	$Id: pcapinfo.c,v 1.21 2025/04/24 04:28:34 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -16,73 +16,18 @@
 */
 
 #include <stdio.h>
+#include <sys/types.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <time.h>
+#include <malloc.h>
+#include <errno.h>
 
 #include "config.h"
-
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
-#endif
-#ifdef HAVE_STDLIB_H
-#include <stdlib.h>
-#endif
-#ifdef HAVE_STDLIB_H
-#include <unistd.h>
-#endif
-#ifdef HAVE_FCNTL_H
-#include <fcntl.h>
-#endif
-#ifdef HAVE_TIME_H
-#include <time.h>
-#endif
-#ifdef HAVE_CTYPE_H
-#include <ctype.h>
-#endif
-#ifdef HAVE_ERRNO_H
-#include <errno.h>
-#endif
-#ifdef HAVE_STDARG_H
-#include <stdarg.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_STAT_H
-#include <sys/stat.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/socket.h>
-#endif
-#ifdef HAVE_NETINET_IN_H
-#include <netinet/in.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
-#include <arpa/inet.h>
-#endif
-#ifdef HAVE_SYS_ENDIAN_H
-#include <sys/endian.h>
-#endif
-#ifdef HAVE_STRING_H
-#include <string.h>
-#endif
-
-/*
- hexdump for debug
- */
-
-void hexdump(char *msg, u_char *data, int len)
-{
-	int addr = 0;
-	if (msg != NULL)
-		printf("%s : \n", msg);
-	while(len-- > 0) {
-		if ((addr % 16) == 0) {
-			printf("%s%04x ", (addr!=0)?"\n":"", addr);
-		}
-		printf("%02x ", *data++);
-		addr++;
-	}
-	printf("\n");
-}
+#include "pcap_data.h"
+#include "dns_string.h"
+#include "mytool.h"
 
 /*****************************************************************************
 	 Warning
@@ -95,18 +40,29 @@ void hexdump(char *msg, u_char *data, int len)
 #define parse_decimal3(x) ((x[0]<'0'||x[0]>'9'||x[1]<'0'||x[1]>'9'||x[2]<'0'||x[2]>'9')?-1:(x[0]-'0')*100+(x[1]-'0')*10+x[2]-'0')
 #define parse_decimal4(x) ((x[0]<'0'||x[0]>'9'||x[1]<'0'||x[1]>'9'||x[2]<'0'||x[2]>'9'||x[3]<'0'||x[3]>'9')?-1:(x[0]-'0')*1000+(x[1]-'0')*100+(x[2]-'0')*10+x[3]-'0')
 
-long long parse_line(u_char *input)
+long long parse_line(char *input)
 {
-	u_char *p;
+	char *p, *q, *r;
 	int msec;
+	double d;
 	struct tm tm;
 
+	if (input[0] == '{') {
+		p = input;
+		while (p != NULL && (p = strchr(p, '"')) != NULL) {
+			if (strncmp(p+1, "timestamp-rfc3339ns\":\"", 22) == 0) {
+				return str2unixlltime(p + 23);
+			}
+			p = strchr(p, ',');
+		}
+		return 0;
+	}
 	p = input;
 	memset(&tm, 0, sizeof(tm));
 	tm.tm_mday = parse_decimal2(p);
-	if (tm.tm_mday < 0 || tm.tm_mday > 31 || p[2] != '-') return -1;
+	if (tm.tm_mday < 0 || tm.tm_mday > 31 || p[2] != '-') return 0;
 	p += 3;
-	if (p[0] == 0 || p[1] == 0 || p[2] == 0 || p[3] != '-') return -1;
+	if (p[0] == 0 || p[1] == 0 || p[2] == 0 || p[3] != '-') return 0;
 	switch (*p) {
 	case 'J': /* Jan, Jun, Jul */
 		if (p[1] == 'a') { tm.tm_mon = 1; }
@@ -136,35 +92,10 @@ long long parse_line(u_char *input)
 	if (tm.tm_sec < 0 || tm.tm_sec >= 60 || p[2] != '.') return 0;
 	p += 3;
 	msec = parse_decimal3(p);
-	if (msec < 0 || p[3] != ' ') return -1;
+	if (msec < 0 || p[3] != ' ') return 0;
 
 	return mktime(&tm) * 1000000 + msec * 1000;
 }
-
-struct pcap_file_header {
-	u_int32_t magic;
-	u_short version_major;
-	u_short version_minor;
-	int32_t thiszone;	/* gmt to local correction */
-	u_int32_t sigfigs;	/* accuracy of timestamps */
-	u_int32_t snaplen;	/* max length saved portion of each pkt */
-	u_int32_t linktype;	/* data link type (LINKTYPE_*) */
-};
-
-struct pcap_header {
-	struct pcap_timeval {
-		u_int32_t tv_sec;	/* seconds */
-		u_int32_t tv_usec;	/* microseconds */
-	} ts;				/* time stamp */
-	int32_t caplen;	/* length of portion present */
-	int32_t len;	/* length this packet (off wire) */
-};
-#define DLT_NULL	0	/* BSD loopback encapsulation */
-#define DLT_EN10MB	1	/* Ethernet (10Mb) */
-#define	DLT_IP		101	/* IP packet directly */
-#define DLT_LINUX_SLL	113	/* Linux cocked */
-#define DLT_RAW		12	/* _ip IP */
-#define	LINKTYPE_OPENBSD_LOOP	108
 
 u_short swap16(u_short x)
 {
@@ -180,6 +111,7 @@ u_long swap32(u_int32_t x)
 }
 
 typedef struct pcap_result {
+	char *type;
 	long long start;
 	long long end;
 	long long count;
@@ -187,62 +119,20 @@ typedef struct pcap_result {
 	long long readsize;
 } pcap_result;
 
-void _parse_file(FILE *fp, pcap_result *result)
+int read_pcap(FILE *fp, pcap_result *result, int needswap)
 {
 	struct pcap_header ph;
-	struct pcap_file_header pf;
-	int needswap = 0;
 	int len;
-	long long offset = 0;
-	long long date;
-	u_char raw[65536];
+	u_char buff[65536];
 
-	len = fread(&pf, 1, sizeof(pf), fp);
-	result->readsize = len;
-
- 	if (len == 0) {
-		if (len == 0) return;
-	}
-	if (len != sizeof(pf)) {
-		return;
-	}
-	if (pf.magic == 0xa1b2c3d4) { /* OK */
-		needswap = 0;
-	} else
-	if (pf.magic == 0xd4c3b2a1) {
-		needswap = 1;
-	} else { /* Query Log mode */
-		memcpy(raw, &pf, len);
-		if (fgets((char *)(raw + len), sizeof(raw)-len, fp) == NULL) {
-			return;
-		}
-		if (!isdigit(raw[0]))
-			return;
-		if ((result->start = parse_line(raw)) <= 0)
-			return;
-		while(fgets((char *)raw, sizeof(raw), fp) != NULL) {
-			if ((date = parse_line(raw)) > 0) {
-				result->end = date;
-			}
-		}
-		return;
-	}
-	if (needswap) {
-		pf.version_major = swap16(pf.version_major);
-		pf.version_minor = swap16(pf.version_minor);
-		pf.thiszone = swap32(pf.thiszone);
-		pf.sigfigs = swap32(pf.sigfigs);
-		pf.snaplen = swap32(pf.snaplen);
-		pf.linktype = swap32(pf.linktype);
-	}
 	result->start = 0;
 	while((len = fread(&ph, 1, sizeof(ph), fp)) == sizeof(ph)) {
 		result->readsize += len;
 		if (ph.len == 0 || ph.caplen == 0) {
 			ph.ts.tv_usec = ph.caplen;
 			len = fread(&ph.caplen, 1, 8, fp);
-			offset += len;
 			if (len != 8) { break; }
+			result->readsize += len;
 		}
 		if (needswap) {
 			ph.caplen = swap32(ph.caplen);
@@ -252,23 +142,154 @@ void _parse_file(FILE *fp, pcap_result *result)
 		}
 		//printf("pakcet:%lld.%06ld %d %d\n", ph.ts.tv_sec, ph.ts.tv_usec, ph.caplen, ph.len);
 		if (ph.caplen > 2000 || ph.len > 2000 || ph.caplen < 0 || ph.len < 0) {
-			break;
+			return -1;
 		}
-		if ((len = fread(raw, 1, ph.caplen, fp)) != ph.caplen) {
-			break;
+		if ((len = fread(buff, 1, ph.caplen, fp)) != ph.caplen) {
+			return -1;
 		}
 		result->readsize += len;
 		result->end = ph.ts.tv_sec * 1000000LL + ph.ts.tv_usec;
 		if (result->start == 0) { result->start = result->end; }
 		result->count++;
 	}
+	return 0;
 }
 
-void parse_file(char *file, pcap_result *result)
+int read_pcapng(FILE *fp, struct pcap_file_header *pf, pcap_result *result)
+{
+	struct pcapng_section_header3 *png3p =
+	       (struct pcapng_section_header3 *)(pf);
+	struct pcapng_section_header2 png2;
+	struct pcapng_type6 *png6p;
+	int len;
+	int rest;
+	int type;
+	int needswap;
+	time_t tt;
+	long long t64;
+	u_char buff[65536];
+
+	result->start = 0;
+	//printf("magic=%lx length=%lx\n", png3p->magic, png3p->length);
+	if (png3p->magic == 0x1a2b3c4d) {
+		needswap = 0;
+	} else {
+		needswap = 1;
+	}
+	rest = needswap ? swap32(png3p->length) : png3p->length;
+	rest -= len;
+	//printf("needswap=%d rest=%d\n", needswap, rest);
+	if (fread(buff, 1, rest, fp) != rest) {
+		return -1;
+	}
+	while((len = fread(&png2, 1, sizeof(png2), fp)) == sizeof(png2)) {
+		rest = needswap ? swap32(png2.length) : png2.length;
+		rest -= sizeof(png2);
+		type = needswap ? swap32(png2.block_type) : png2.block_type;
+		len = fread(buff, 1, rest, fp);
+		if (len != rest) return -1;
+		//printf("type=%d len=%d\n", type, len);
+		//hexdump("data", c->raw, rest);
+		if (type == 6) {
+			png6p = (struct pcapng_type6 *)&buff;
+			t64 = ((unsigned long long)(needswap?swap32(png6p->tv_h):png6p->tv_h) << 32) + (needswap?swap32(png6p->tv_l):png6p->tv_l);
+			result->readsize += len;
+			result->end = t64;
+			if (result->start == 0) { result->start=result->end; }
+			result->count++;
+		}
+	}
+	return 0;
+}
+
+#define	NBUFF 10
+#define	BSIZE 65536
+
+int _parse_file(FILE *fp, pcap_result *result)
+{
+	struct pcap_file_header pf;
+	int needswap = 0;
+	int len;
+	int rest;
+	long long tt;
+	int max = 0;
+	int i;
+	char *raw[NBUFF];
+
+	for (i = 0; i < NBUFF; i++)
+		if ((raw[i] = malloc(BSIZE)) == NULL) return -1;
+	len = fread(&pf, 1, sizeof(pf), fp);
+	result->readsize = len;
+
+ 	if (len == 0) {
+		if (len == 0) return -1;
+	}
+	if (len != sizeof(pf)) {
+		return -1;
+	}
+	needswap = 0;
+	switch(pf.magic) {
+	case 0xd4c3b2a1:
+		needswap = 1;
+	case 0xa1b2c3d4:
+		result->type = "pcap";
+		return read_pcap(fp, result, needswap);
+		break;
+	case 0x0a0d0d0a: // pcapng mode
+		result->type = "pcapng";
+		return read_pcapng(fp, &pf, result);
+		break;
+	}
+	/* Text mode */
+	memcpy(raw[0], &pf, len);
+	if (fgets((char *)(raw[0] + len), BSIZE-len, fp) == NULL) return -1;
+	result->readsize = strlen(raw[0]);
+	result->count++;
+	if (isdigit(raw[0][0]) || raw[0][0] == '{') { // query log or json mode
+		if ((result->start = parse_line(raw[0])) <= 0)
+			return -1;
+		result->type = (raw[0][0] == '{')? "dnstap":"querylog";
+		i = NBUFF-1;
+		while(i-- > 0 && fgets(raw[0], BSIZE, fp) != NULL) {
+			result->readsize += strlen(raw[0]);
+			result->count++;
+			if ((tt = parse_line(raw[0])) <= 0) return -1;
+			if (result->start > tt) result->start = tt;
+			if (result->end < tt) result->end = tt;
+		}
+		max = 0;
+		i = 0;
+		while(fgets(raw[i], BSIZE, fp) != NULL) {
+			result->readsize += strlen(raw[i]);
+			result->count++;
+			i = (i + 1) % NBUFF;
+			if (max < i) max = i;
+		}
+		for (i = 0; i < max; i++) {
+			if ((tt = parse_line(raw[i])) > 0) {
+				if (result->end < tt) result->end = tt;
+			}
+		}
+		return -1;
+	}
+	return -1;
+}
+
+static struct compressed_files
+{ char *extention;char *extractcmd; } compressed_files[] = {
+	{ ".gz", "gzip -cd %s" },
+	{ ".zst", "zstd -cd %s" },
+	{ ".xz", "xz -cd %s" },
+	{ ".bz2", "bzip2 -cd %s" },
+	{ NULL, NULL }
+};
+
+int parse_file(char *file, pcap_result *result)
 {
 	FILE *fp;
-	int len;
+	int len, extlen, ret;
 	int close_status = 0;
+	struct compressed_files *cp = compressed_files;
 	struct stat sb;
 	char buff[1024];
 
@@ -276,45 +297,55 @@ void parse_file(char *file, pcap_result *result)
 		result->size = sb.st_size;
 	}
 	len = strlen(file);
-	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
-		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
-		if ((fp = popen(buff, "r")) == NULL)
-			return;
-		_parse_file(fp, result);
-		close_status = pclose(fp);
-	} else
-	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
-		snprintf(buff, sizeof buff, "gzip -cd %s", file);
-		if ((fp = popen(buff, "r")) == NULL)
-			return;
-		_parse_file(fp, result);
-		close_status = pclose(fp);
-	} else
-	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
-		snprintf(buff, sizeof buff, "xz -cd %s", file);
-		if ((fp = popen(buff, "r")) == NULL)
-			return;
-		_parse_file(fp, result);
-		close_status = pclose(fp);
-	} else {
-		if ((fp = fopen(file, "r")) == NULL)
-			return;
-		_parse_file(fp, result);
-		close_status = fclose(fp);
+	while (cp->extention != NULL) {
+		extlen = strlen(cp->extention);
+		if (len>extlen && strcmp(file+len-extlen, cp->extention) == 0) {
+			snprintf(buff, sizeof buff, cp->extractcmd, file);
+			if ((fp = popen(buff, "r")) == NULL)
+				ret = -1;
+			else {
+				ret = _parse_file(fp, result);
+				close_status = pclose(fp);
+			}
+			break;
+		}
+		cp++;
 	}
+	if (cp->extention == NULL) {
+		if ((fp = fopen(file, "r")) == NULL)
+			ret = -1;
+		else {
+			ret = _parse_file(fp, result);
+			close_status = fclose(fp);
+		}
+	}
+	if (ret == 0 && close_status > 0)
+		fprintf(stderr, "fclose_returned:%d/%d:%s errno=%d\n", close_status, ret, file, errno);
+	return ret;
 }
 
 int main(int argc, char *argv[])
 {
 	pcap_result t;
 	int i;
+	int r;
+	double v1, v2, v3, v4;
+	long long tt1, tt2;
 
 	// printf("#filename,#start,#end,#filesize,#readsize\n");
 	for (i = 1; i < argc; i++) {
 		memset(&t, 0, sizeof(t));
-		parse_file(argv[i], &t);
-		if (t.start <= 0 || t.end <= 0) { t.start = -1; t.end = -1; }
-		printf("%s,%lld,%lld,%lld,%lld,%lld\n", argv[i], t.start, t.end, t.count, t.size, t.readsize);
+		t.type = "";
+		tt1 = now();
+		r = parse_file(argv[i], &t);
+		tt2 = now() - tt1;
+		if (tt2 == 0) tt2 = 1;
+		printf("%s,%s,%lld,%lld,%lld,%lld,%lld,%lld\n", argv[i], t.type, t.start, t.end, t.count, t.size, t.readsize, tt2);
+		v1 = tt2 / 1000000.0;
+		v2 = t.count / v1;
+		v3 = t.readsize / v1 / 1024 / 1024;
+		v4 = t.size / v1 / 1024 / 1024;
+		fprintf(stderr, "Loaded %lld data from %s, %.2f sec, %.1f data/sec, %.1f (%.1f) MB/sec\n", t.count, argv[i], v1, v2, v3, v4);
 		fflush(stdout);
 	}
 	return 0;

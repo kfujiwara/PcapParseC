@@ -1,21 +1,13 @@
 #include "config.h"
 
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
 #include <stdio.h>
-#ifdef HAVE_STDLIB_H
 #include <stdlib.h>
-#endif
-#ifdef HAVE_ERRNO_H
 #include <errno.h>
-#endif
-#ifdef HAVE_CTYPE_H
 #include <ctype.h>
-#endif
-#ifdef HAVE_STRING_H
 #include <string.h>
-#endif
+#include <time.h>
+#include <sys/time.h>
 
 #include "mytool.h"
 #include "bit.h"
@@ -77,18 +69,6 @@ char *my_strdup2(char *s, int len)
 	new[len] = 0;
 	return new;
 }
-
-#ifndef HAVE_ERR
-void err(int err, char *format, ...)
-{
-	va_list ap;
-	va_start(ap, format);
-	vprintf(format, ap);
-	printf("\n");
-	va_end(ap);
-	exit(err);
-}
-#endif
 
 long long getint(char *src, char **next, int *error, int errorcode)
 {
@@ -207,5 +187,27 @@ void hexdump(char *msg, u_char *data, int len)
 		addr++;
 	}
 	printf("\n");
+}
+
+int strdate2unixtime(int num)
+{
+	struct tm tt;
+
+	memset(&tt, 0, sizeof(tt));
+	if (num < 19800000) { return 0; };
+	tt.tm_year = (num / 10000) - 1900;
+	tt.tm_mon = ((num / 100) % 100) - 1;
+	tt.tm_mday = num % 100;
+	return mktime(&tt);
+}
+
+long long now()
+{
+	struct timeval t;
+	long long tt;
+
+	int r = gettimeofday(&t, NULL);
+	tt = t.tv_sec * 1000000LL + t.tv_usec;
+	return tt;
 }
 

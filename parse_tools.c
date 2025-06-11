@@ -1,5 +1,5 @@
 /*
-	$Id: parse_tools.c,v 1.2 2024/05/09 15:15:28 fujiwara Exp $
+	$Id: parse_tools.c,v 1.6 2025/04/17 06:55:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -11,22 +11,19 @@
 	written in JPRS-OSCL.txt.
 */
 
-#include "config.h"
 
 #include <stdio.h>
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_RESOURCE_H
 #include <sys/resource.h>
-#endif
 
 #include "ext/uthash.h"
+
+#include "config.h"
 #include "mytool.h"
-#include "PcapParse.h"
+#include "pcapparse.h"
 #include "parse_int.h"
 
-char *parse_pcap_error(int errorcode)
+char *parse_file_error(int errorcode)
 {
 	switch(errorcode) {
 	case ParsePcap_NoError:
@@ -76,6 +73,8 @@ void Print_PcapStatistics(struct DNSdataControl *c)
 	NonzeroPrint("#PcapStatistics._tcpbuff_zero_fin", c->ParsePcapCounter._tcpbuff_zerofin);
 	NonzeroPrint("#PcapStatistics._proto_mismatch", c->ParsePcapCounter._proto_mismatch);
 	NonzeroPrint("#PcapStatistics._ipv4_headerchecksumerror", c->ParsePcapCounter._ipv4_headerchecksumerror);
+	NonzeroPrint("#PcapStatistics._ipv4_protochecksumerror", c->ParsePcapCounter._ipv4_protochecksumerror);
+	NonzeroPrint("#PcapStatistics._ipv6_protochecksumerror", c->ParsePcapCounter._ipv6_protochecksumerror);
 	NonzeroPrint("#PcapStatistics._udp_checksumerror", c->ParsePcapCounter._udp_checksumerror);
 	NonzeroPrint("#PcapStatistics._before_checking_dnsheader", c->ParsePcapCounter._before_checking_dnsheader);
 	NonzeroPrint("#PcapStatistics._dns_query", c->ParsePcapCounter._dns_query);

@@ -1,5 +1,5 @@
 /*
-	$Id: parse_bind9log.c,v 1.4 2024/05/13 07:09:55 fujiwara Exp $
+	$Id: parse_bind9log.c,v 1.16 2025/05/01 10:06:07 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -12,31 +12,19 @@
 */
 
 #include <stdio.h>
-
-#include "config.h"
-
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
-#ifdef HAVE_CTYPE_H
 #include <ctype.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/socket.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
-#endif
-#ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
-#endif
-#ifdef HAVE_TIME_H
 #include <time.h>
-#endif
 
 #include "ext/uthash.h"
+
+#include "config.h"
 #include "mytool.h"
-#include "PcapParse.h"
+#include "dns_string.h"
+#include "pcapparse.h"
 #include "parse_int.h"
 #include "parse_DNS.h"
 
@@ -45,104 +33,8 @@
    ------------------------------------------------------------------
 */
 
-struct types { char *name; int code; } types[] = {
-{ "A", 1, },
-{ "AAAA", 28, },
-{ "PTR", 12, },
-{ "MX", 15, },
-{ "TXT", 16, },
-{ "NS", 2, },
-{ "DS", 43, },
-{ "SRV", 33, },
-{ "CNAME", 5, },
-{ "SOA", 6, },
-{ "DNSKEY", 48, },
-{ "ANY", 255, },
-{ "AXFR", 252, },
-{ "TLSA", 52, },
-{ "HINFO", 13, },
-{ "A6", 38, },
-{ "SPF", 99, },
-{ "ATMA", 34, },
-{ "NAPTR", 35, },
-{ "KX", 36, },
-{ "CERT", 37, },
-{ "DNAME", 39, },
-{ "SINK", 40, },
-{ "OPT", 41, },
-{ "APL", 42, },
-{ "SSHFP", 44, },
-{ "IPSECKEY", 45, },
-{ "RRSIG", 46, },
-{ "NSEC", 47, },
-{ "DHCID", 49, },
-{ "NSEC3", 50, },
-{ "NSEC3PARAM", 51, },
-{ "SMIMEA", 53, },
-{ "HIP", 55, },
-{ "NINFO", 56, },
-{ "RKEY", 57, },
-{ "TALINK", 58, },
-{ "CDS", 59, },
-{ "CDNSKEY", 60 },
-{ "OPENPGPKEY", 61 },
-{ "CSYNC", 62 },
-{ "ZONEMD", 63 },
-{ "SVCB", 64 },
-{ "HTTPS", 65 },
-{ "SPF", 99, },
-{ "UINFO", 100, },
-{ "UID", 101, },
-{ "GID", 102, },
-{ "UNSPEC", 103, },
-{ "NID", 104 },
-{ "L32", 105 },
-{ "L64", 106 },
-{ "LP", 107 },
-{ "EUI48", 108 },
-{ "EUI64", 109 },
-{ "TKEY", 249, },
-{ "TSIG", 250, },
-{ "IXFR", 251, },
-{ "MAILB", 253, },
-{ "MAILA", 254, },
-{ "*", 255, },
-{ "URI", 256, },
-{ "CAA", 257, },
-{ "AVC", 258, },
-{ "DOA", 259, },
-{ "AMTRELAY", 260, },
-{ "TA", 32768, },
-{ "DLV", 32769, },
-{ "RESERVED0", 0, },
-{ "MD", 3, },
-{ "MF", 4, },
-{ "MB", 7, },
-{ "MG", 8, },
-{ "MR", 9, },
-{ "NULL", 10, },
-{ "WKS", 11, },
-{ "MINFO", 14, },
-{ "RP", 17, },
-{ "AFSDB", 18, },
-{ "X25", 19, },
-{ "ISDN", 20, },
-{ "RT", 21, },
-{ "NSAP", 22, },
-{ "NSAP-PTR", 23, },
-{ "SIG", 24, },
-{ "KEY", 25, },
-{ "PX", 26, },
-{ "GPOS", 27, },
-{ "LOC", 29, },
-{ "NXT", 30, },
-{ "EID", 31, },
-{ "NIMLOC", 32, },
-{ NULL, -1 },
-};
-
 enum _state { err_date = 1, err_addr = 2, err_port = 3, err_qname = 4, err_class = 5, err_type = 6, err_flag = 7, err_server = 8, err_ignored = 9 };
-char *parse_line_error[] = {
+char *parse_bind9log_error[] = {
 "NoERROR", "ErrDate", "ErrAddr", "ErrPort", "ErrQname", "ErrClass",
 "ErrType", "ErrFlag", "ErrServer", "ErrIgnored" };
 
@@ -187,7 +79,7 @@ int parse_decimal4(char *x)
 	return (x[0]-'0')*1000+(x[1]-'0')*100+(x[2]-'0')*10+x[3]-'0';
 }
 
-int parse_line(struct DNSdataControl* c)
+int parse_bind9log(struct DNSdataControl* c)
 {
 	char *p, *q, *r;
 	char *_type = NULL, *_class = NULL;
@@ -195,7 +87,7 @@ int parse_line(struct DNSdataControl* c)
 	int msec;
 	struct tm tm;
 	int len, i, j, k;
-	struct types *tt;
+	struct dns_types *tt;
 	char *str;
 	u_char ip_src[16];
 	u_char ip_dst[16];
@@ -253,6 +145,7 @@ int parse_line(struct DNSdataControl* c)
 		return 0;
 	}
 	// Test BIND 8 style ?
+	// 27-Jan-2004 00:00:00.000 queries: info: XX /192.168.1.5/mx1.example.co.jp/A/IN
 	q = strchr(p, 'X');
 	if (q != NULL && q[0] == 'X' && q[1] == 'X' && q[2] != 0 && q[3] == '/') {
 		// BIND 8 mode
@@ -260,6 +153,7 @@ int parse_line(struct DNSdataControl* c)
 		p = q + 4;
 		q = strchr(p, '/');
 		if (q == NULL) return err_addr;
+		if (q-p-1 >= sizeof(s_src)) return err_addr;
 		memcpy(s_src, p, q - p);
 		s_src[q-p] = 0;
 		if (inet_pton(AF_INET, s_src, ip_src) == 1) {
@@ -305,13 +199,8 @@ int parse_line(struct DNSdataControl* c)
 			memcpy(c->dns.qname, p, q-p);
 		}
 		c->dns.qname[q-p] = 0;
-		k = -1;
-		for (tt = types; tt->name != NULL; tt++) {
-			if (strncasecmp((char *)_type, tt->name, _typelen) == 0) {
-				k = tt->code;
-				break;
-			}
-		}
+		_type[_typelen] = 0;
+		k = str2type(_type);
 		if (k == -1) {
 			if (strncasecmp((char *)_type, "BADTYPE", _typelen) == 0) {
 				k = 0;
@@ -321,28 +210,9 @@ int parse_line(struct DNSdataControl* c)
 		}
 		if (k < 0 || k > 65535) return err_type;
 		c->dns.qtype = k;
-
-		if (strncasecmp((char *)_class, "IN", _classlen) == 0) {
-			c->dns.qclass = 1;
-		} else
-		if (strncasecmp((char *)_class, "CHAOS", _classlen) == 0) {
-			c->dns.qclass = 3;
-		} else
-		if (strncasecmp((char *)_class, "HS", _classlen) == 0) {
-			c->dns.qclass = 4;
-		} else
-		if (strncasecmp((char *)_class, "BADCLASS", _classlen) == 0) {
-			c->dns.qclass = 0;
-		} else
-		if (strncasecmp((char *)_class, "ANY", _classlen) == 0) {
-			c->dns.qclass = 255;
-		} else
-		if (strncasecmp((char *)_class, "CLASS", 5) == 0) {
-			k = strtol((char *)_class + 5, NULL, 10);
-			if (k < 0 || k > 65535) return err_class;
-			c->dns.qclass = k;
-		} else
-			return err_class;
+		_class[_classlen] = 0;
+		c->dns.qclass = str2class(_class);
+		if (c->dns.qclass < 0) return err_class;
 
 		c->dns._transport_type = T_UDP;
 		c->dns._qr = 0;
@@ -353,6 +223,7 @@ int parse_line(struct DNSdataControl* c)
 		for (r = q - 1; r >= p && *r != ' ' && *r != 0; r--);
 		if (*r != ' ') return err_addr;
 		p = r + 1;
+		if (q-p-1 >= sizeof(s_src)) return err_addr;
 		memcpy(s_src, p, q - p);
 		s_src[q-p] = 0;
 		r = strchr(s_src, '%');
@@ -435,42 +306,15 @@ int parse_line(struct DNSdataControl* c)
 			p += len + 1;
 		}
 		q = strchr(p, ' ');
-		if (q == NULL) return err_class;
-		len = q-p;
-		if (strncasecmp(p, "IN", len) == 0) {
-			c->dns.qclass = 1;
-		} else
-		if (strncasecmp(p, "CH", len) == 0) {
-			c->dns.qclass = 3;
-		} else
-		if (strncasecmp(p, "HS", len) == 0) {
-			c->dns.qclass = 4;
-		} else
-		if (strncasecmp(p, "ANY", len) == 0) {
-			c->dns.qclass = 255;
-		} else
-		if (strncasecmp(p, "CLASS", 5) == 0) {
-			k = strtol(p + 5, NULL, 10);
-			if (k < 0 || k > 65535) return err_class;
-			c->dns.qclass = k;
-		} else
-			return err_class;
+		*q = 0;
+		c->dns.qclass = str2class(p);
+		if (c->dns.qclass < 0) return err_class;
 	
 		p = q + 1;
 		q = strchr(p, ' ');
 		if (q == NULL) return err_type;
-		len = q-p;
-		k = -1;
-		for (tt = types; tt->name != NULL; tt++) {
-			if (strncasecmp(p, tt->name, len) == 0) {
-				k = tt->code;
-				break;
-			}
-		}
-		if (k == -1) {
-			if (strncasecmp(p, "TYPE", 4) == 0)
-				k = strtol(p + 4, NULL, 10);
-		}
+		*q = 0;
+		k = str2type(p);
 		if (k < 0 || k > 65535) return err_type;
 		c->dns.qtype = k;
 	
@@ -503,6 +347,7 @@ int parse_line(struct DNSdataControl* c)
 			p++;
 			q = strchr(p, ')');
 			if (q != NULL) {
+				if (q-p-1 >= sizeof(s_src)) return err_server;
 				memcpy(s_dst, p, q - p);
 				s_dst[q-p] = 0;
 				if (inet_pton(c->dns.af, s_dst, ip_dst) != 1) {
@@ -514,119 +359,52 @@ int parse_line(struct DNSdataControl* c)
 		}
 	} // End of both BIND 8 and BIND 9
 
-	if (c->dns.af == AF_INET) {
-		c->dns.version = 4;
-		c->ParsePcapCounter._ipv4++;
-
-		if (c->dns._transport_type == T_TCP) {
-			c->ParsePcapCounter._tcp4++;
-		} else {
-			c->ParsePcapCounter._udp4++;
-		};
-		c->dns.portaddrlen = 2+4;
-		c->dns.portaddr[0] = c->dns.p_sport >> 8;
-		c->dns.portaddr[1] = c->dns.p_sport & 0xff;
-		memcpy(c->dns.portaddr+2, c->dns.p_src, 4);
-		c->dns.portaddr[6] = 0;
-		c->dns.portaddr[7] = 53;
-		if (c->dns.p_dst != NULL) {
-			memcpy(c->dns.portaddr+8, c->dns.p_dst, 4);
-		} else {
-			memset(c->dns.portaddr+8, 0, 4);
-		}
-	} else
-	if (c->dns.af == AF_INET6) {
-		c->dns.version = 6;
-		c->ParsePcapCounter._ipv6++;
-		if (c->dns._transport_type == T_TCP) {
-			c->ParsePcapCounter._tcp6++;
-		} else {
-			c->ParsePcapCounter._udp6++;
-		}
-		c->dns.portaddrlen = 2+16;
-		c->dns.portaddr[0] = c->dns.p_sport >> 8;
-		c->dns.portaddr[1] = c->dns.p_sport & 0xff;
-		memcpy(c->dns.portaddr+2, c->dns.p_src, 16);
-		c->dns.portaddr[18] = 0;
-		c->dns.portaddr[19] = 53;
-		if (c->dns.p_dst != NULL) {
-			memcpy(c->dns.portaddr+20, c->dns.p_dst, 16);
-		} else {
-			memset(c->dns.portaddr+20, 0, 16);
-		}
-	}
-
+	inc_ipv_proto_counter(c);
+	fixup_portaddr(c);
 	c->dns.p_dport = 53;
 	c->ParsePcapCounter._dns_query++;
 
-	if (c->do_address_check)
-		if (c->callback(c, CALLBACK_ADDRESSCHECK) == 0) {
-			c->ParsePcapCounter._unknown_ipaddress++;
-			return err_ignored;
-		}
-
-	if (c->dns.version == 6 && (c->dns.p_src[0] & 0xfc) == 0xfc) {
-		return 1;
-	}
-
-	c->ParsePcapCounter._before_checking_dnsheader++;
-
-	strcpy((char *)c->dns.qnamebuf, (char *)c->dns.qname);
-	p = c->dns.qnamebuf;
-	i = 0;
-	while (p != NULL && i < PcapParse_LABELS) {
-		c->dns.label[i] = p;
-		q = strchr(p, '.');
-		if (q != NULL) {
-			*q = 0;
-			p = q+1;
-			if (*p == 0) { p = NULL; };
-		} else {
-			p = NULL;
-		}
-		i++;
-	}
-	c->dns.nlabel = i;
-	/* swap order */
-	for (i = 0, j = c->dns.nlabel - 1; i < j; i++, j--) {
-		p = c->dns.label[i];
-		c->dns.label[i] = c->dns.label[j];
-		c->dns.label[j] = p;
-	}
-	c->ParsePcapCounter._parsed_dnsquery++;
-	c->dns.datatype = DATATYPE_DNS;
+	prepare_dns_labels(c);
+	prepare_dns_substring(c);
 	(void)(c->callback)(c, CALLBACK_PARSED);
 	return 0;
 }
 
 int _parse_bind9log(FILE *fp, struct DNSdataControl *c)
 {
-	int line1 = 0;
+	long line1 = 0;
+	long long size1 = 0;
 	int ret;
-	time_t tt1, tt2;
+	time_t tt;
+	double v1, v2, v3, v4;
 #ifdef DEBUG_LOGmode
 	char buff[1024];
 #endif
-
-	tt1 = time(NULL);
 	do {
 		c->lineno++;
 		line1++;
+		size1 += strlen((char *)c->raw);
 		memset(&c->dns, 0, sizeof(c->dns));
 #ifdef DEBUG_LOGmode
 		strncpy(buff, c->raw, sizeof(buff));
 #endif
-		ret = parse_line(c);
+		ret = parse_bind9log(c);
 		if (ret > 0 && ret < 10) {
 			c->ParsePcapCounter.error[ret]++;
 #ifdef DEBUG_LOGmode
-			fprintf(stderr, "error%02d:%s: %s", ret, parse_line_error[ret], buff);
+			fprintf(stderr, "error%02d:%s: %s", ret, parse_bind9log_error[ret], buff);
 #endif
 		}
 	} while(fgets((char *)c->raw, c->rawlen, fp) != NULL);
-	tt2 = time(NULL) - tt1;
-	if (tt2 == 0) tt2 = 1;
-	fprintf(stderr, "Loaded %d/%d lines from %s, %ld sec, %ld lines/sec\n", line1, c->lineno, c->filename, tt2, line1/tt2);
+	tt = now() - c->open_time;
+	if (tt == 0) tt = 1;
+	v1 = tt / 1000000.0;
+	v2 = line1 / v1;
+	v3 = size1 / v1 / 1024.0/1024.0;
+	v4 = c->file_size / v1 / 1024.0/1024.0;
+	fprintf(stderr, "size: %lld %ld\n", size1, c->file_size);
+	fprintf(stderr, "Loaded %ld lines from %s, %.1f sec, %.1f lines/sec, %.1f (%.1f) MB/s\n",
+		line1, c->filename, v1, v2, v3, v4);
 	fflush(stderr);
 	return 0;
 }

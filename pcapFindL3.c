@@ -1,5 +1,5 @@
 /*
-	$Id: PcapSelectL3.c,v 1.38 2024/05/09 15:15:28 fujiwara Exp $
+	$Id: pcapFindL3.c,v 1.47 2025/06/04 08:14:20 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -13,38 +13,25 @@
 */
 
 #include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <errno.h>
+#include <err.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
+#include "ext/uthash.h"
 
 #include "config.h"
+#include "pcapparse.h"
+#include "addrport_match.h"
 
 #define ENVNAME "PCAPGETQUERY_ENV"
 
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
-#endif
-#ifdef HAVE_STDLIB_H
-#include <unistd.h>
-#endif
-#ifdef HAVE_CTYPE_H
-#include <ctype.h>
-#endif
-#ifdef HAVE_ERRNO_H
-#include <errno.h>
-#endif
-#ifdef HAVE_ERR_H
-#include <err.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/socket.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
-#include <arpa/inet.h>
-#endif
-
-#include "ext/uthash.h"
-#include "PcapParse.h"
-
 long long begin = -1;
 long long end = -1;
+long long length = 60;
 int time_offset = 0;
 int accept_v4 = 0;
 int accept_v6 = 0;
@@ -61,6 +48,7 @@ int single_file = 0;
 int ignore_shortread = 0;
 int cut_num_packets = -1;
 char *serverlist_file = NULL;
+char *OutputFile = NULL;
 char *Logfile = NULL;
 FILE * LogFP = NULL;
 
@@ -75,100 +63,19 @@ void hexdump(char *msg, u_char *data, int len)
 {
 	int addr = 0;
 	if (msg != NULL)
-		printf("%s : \n", msg);
+		fprintf(stderr, "%s : \n", msg);
 	while(len-- > 0) {
 		if ((addr % 16) == 0) {
-			printf("%s%04x ", (addr!=0)?"\n":"", addr);
+			fprintf(stderr, "%s%04x ", (addr!=0)?"\n":"", addr);
 		}
-		printf("%02x ", *data++);
+		fprintf(stderr, "%02x ", *data++);
 		addr++;
 	}
-	printf("\n");
+	fprintf(stderr, "\n");
 }
 
-struct ipaddr_hash {
-	int count;
-	u_int alen;
-	u_char addr[18];
-	UT_hash_handle hh;
-};
-
-static struct ipaddr_hash *ipaddr1_hash = NULL;
-static struct ipaddr_hash *ipaddr2_hash = NULL;
-
-// ipaddr/portno
-void register_ipaddr_port_hash(char *str, struct ipaddr_hash **hash)
-{
-	int alen = 0;
-	u_char portaddr[18];
-	struct ipaddr_hash *e;
-	int port;
-	char *p, *q, *r;
-	int offset = 0;
-
-	p = str;
-	//printf("Input=%s\n", p);
-	while (p != NULL && *p != 0) {
-		q = strchr(p, ',');
-		if (q != NULL && *q == ',') {
-			*q++ = 0;
-		} else {
-			q = NULL;
-		}
-		r = strchr(p, '#');
-		if (r == NULL || *r != '#') {
-			port = -1;
-		} else {
-			port = atoi(r+1);
-			*r = 0;
-			offset = 2;
-			portaddr[0] = ((port & 0xff00) >> 8);
-			portaddr[1] = port & 0xff;
-		}
-		if (strchr(p, ':') != NULL) {
-			if (inet_pton(AF_INET6,p,portaddr+offset)==0)
-				err(1, "cannot parse6 %s", p);
-			alen = 16;
-		} else {
-			if (inet_pton(AF_INET,p,portaddr+offset)==0)
-				err(1, "cannot parse4 %s", p);
-			alen = 4;
-		}
-		HASH_FIND(hh, (*hash), portaddr, alen+offset, e);
-		if (e == NULL) {
-			e = malloc(sizeof(struct ipaddr_hash));
-			e->alen = alen+offset;
-			memcpy(e->addr, portaddr, alen+offset);
-			e->count = 0;
-			HASH_ADD(hh, (*hash), addr, e->alen, e);
-			if (opt_v) printf("Match_IP_address:%s %d\n", p, port);
-		}
-		p = q;
-	}
-}
-
-void print_ipaddrlist_hash(struct ipaddr_hash *hash)
-{
-	struct ipaddr_hash *e, *tmp;
-	int i;
-	u_char *a;
-	char s[256];
-
-	HASH_ITER(hh, hash, e, tmp) {
-		a = e->addr;
-		switch(e->alen) {
-		case 4:  printf("%d.%d.%d.%d", a[0], a[1], a[2], a[3]); break;
-		case 6:  printf("%d.%d.%d.%d#%d", a[2], a[3], a[4], a[5], a[0]*256+a[1]); break;
-		case 16: printf("%s", inet_ntop(AF_INET6, a, s, sizeof s)); break;
-		case 18: printf("%s#%d", inet_ntop(AF_INET6, a+2, s, sizeof s), a[0]*256+a[1]); break;
-		}
-		printf("   ");
-		for (i = 0; i < e->alen; i++) {
-			printf(" %02x", a[i]);
-		}
-		printf("\n");
-	}
-}
+static struct ipaddr_port_list ipaddr1_list = { NULL, 0};
+static struct ipaddr_port_list ipaddr2_list = { NULL, 0};
 
 /*
 			Supported Linktype: DLT_NULL, DLT_EN10MB, DLT_IP, DLT_LINUX_SLL
@@ -465,27 +372,22 @@ int parse_packet(FILE *wfp, long long ts, u_char *_ip, int _iplen)
 			match_frag = 1;
 		}
 	}
-	if (ipaddr1_hash != NULL) {
+	i1 = is1 = id1 = NULL;
+	if (ipaddr1_list.hash != NULL) {
 		if (accept_query) {
-			HASH_FIND(hh, ipaddr1_hash, ip_src+2, alen, is1);
-			if (is1 == NULL) HASH_FIND(hh, ipaddr1_hash, ip_src, alen+2, is1);
+			is1 = match_ipaddr_port(&ipaddr1_list, ip_src, alen);
 		}
 		if (accept_reply) {
-			HASH_FIND(hh, ipaddr1_hash, ip_dst+2, alen, id1);
-			if (id1 == NULL) HASH_FIND(hh, ipaddr1_hash, ip_dst, alen+2, id1);
+			id1 = match_ipaddr_port(&ipaddr1_list, ip_dst, alen);
 		}
 		i1 = (is1 != NULL) ? is1 : id1;
-	} else {
-		i1 = NULL;
 	}
-	if (ipaddr2_hash != NULL) {
+	if (ipaddr2_list.hash != NULL) {
 		if (accept_reply) {
-			HASH_FIND(hh, ipaddr2_hash, ip_src+2, alen, is2);
-			if (is2 == NULL) HASH_FIND(hh, ipaddr2_hash, ip_src, alen+2, is2);
+			is2 = match_ipaddr_port(&ipaddr2_list, ip_src, alen);
 		}
 		if (accept_query) {
-			HASH_FIND(hh, ipaddr2_hash, ip_dst+2, alen, id2);
-			if (id2 == NULL) HASH_FIND(hh, ipaddr2_hash, ip_dst, alen+2, id2);
+			id2 = match_ipaddr_port(&ipaddr2_list, ip_dst, alen);
 		}
 		i2 = (is2 != NULL) ? is2 : id2;
 	} else {
@@ -493,8 +395,8 @@ int parse_packet(FILE *wfp, long long ts, u_char *_ip, int _iplen)
 	}
 	if (i1 != NULL) i1->count++;
 	if (i2 != NULL) i2->count++;
-	ignore = (ipaddr1_hash != NULL && i1 == NULL)
-		|| (ipaddr2_hash != NULL && i2 == NULL)
+	ignore = (ipaddr1_list.hash != NULL && i1 == NULL)
+		|| (ipaddr2_list.hash != NULL && i2 == NULL)
 		|| (accept_frag != 0 && match_frag != 0)
 		|| (match_proto == 0 && match_frag == 0)
 		|| !match_time;
@@ -544,7 +446,7 @@ int pcap_cleanup(FILE *wfp, int argc, char **argv)
 				ret = parse_packet(wfp, pcapfiles[i].ts,_ip, iplen);
 				if (ret != 0) {
 					prev = pcapfiles[i].ts;
-					if (opt_v>0) printf("writing: %d bytes. ts=%lld delta=%lld path=%s\n", iplen, pcapfiles[i].ts, pcapfiles[i].ts-prev, pcapfiles[i].path);
+					if (opt_v>0) fprintf(stderr, "writing: %d bytes. ts=%lld delta=%lld path=%s\n", iplen, pcapfiles[i].ts, pcapfiles[i].ts-prev, pcapfiles[i].path);
 				}
 				error = pcap_read(&pcapfiles[i]);
 				if (error != 0 && error != ParsePcap_EOF) {
@@ -589,7 +491,7 @@ int pcap_cleanup(FILE *wfp, int argc, char **argv)
 		ret = parse_packet(wfp, pcapfiles[found].ts,_ip, iplen);
 		if (ret != 0) {
 			prev = pcapfiles[found].ts;
-			if (opt_v>0) printf("writing: %d bytes. ts=%lld delta=%lld path=%s\n", iplen, pcapfiles[found].ts, pcapfiles[found].ts-prev, pcapfiles[found].path);
+			if (opt_v>0) fprintf(stderr, "writing: %d bytes. ts=%lld delta=%lld path=%s\n", iplen, pcapfiles[found].ts, pcapfiles[found].ts-prev, pcapfiles[found].path);
 			if (--cut_num_packets == 0) return 0;
 		}
 		prev = pcapfiles[found].ts;
@@ -627,77 +529,23 @@ char *pcap_cleanup_error(int errorcode)
 	}
 }
 
-void load_ipaddrlist(char *filename, struct ipaddr_hash **hash)
-{
-	char buff[512];
-	int l;
-	FILE *fp;
-
-	if ((fp = fopen(filename, "r")) == NULL)
-		err(1, "cannot open %s", filename);
-	while(fgets(buff, sizeof buff, fp) != NULL) {
-		if (buff[0] == '#') continue;
-		l = strlen(buff);
-		if (l > 0 && !isprint(buff[l-1])) buff[l-1] = 0;
-		register_ipaddr_port_hash(buff, hash);
-	}
-	fclose(fp);
-}
-
-void load_ipaddrlist_tld(char *tld, struct ipaddr_hash **hash)
-{
-	char buff[512];
-	int l;
-	FILE *fp;
-	char *p, *q;
-
-	if ((fp = fopen(serverlist_file, "r")) == NULL)
-		err(1, "cannot open %s", serverlist_file);
-	l = strlen(tld);
-	while(fgets(buff, sizeof buff, fp) != NULL) {
-		if (buff[0] == '#') continue;
-		if (strncmp(buff, "T,", 2) == 0
-		   && strncasecmp(buff+2, tld, l) == 0
-		   && buff[2+l] == ',') {
-			p = &buff[2+l+1];
-			q = strchr(p, '\n');
-			if (q != NULL) *q = 0;
-			q = strchr(p, ',');
-			if (q != NULL) { p = q+1; }
-			do {
-				q = strchr(p, '/');
-				if (q != NULL) {
-					*q = 0;
-					q++;
-				}
-				register_ipaddr_port_hash(p, hash);
-				p = q;
-			} while (p != NULL);
-		}
-	}
-	fclose(fp);
-}
-
 void usage(int c)
 {
-	printf("PcapSelectL3 [-T timezone offset] options OutputFile InputFiles....\n"
-"time options: if specified, only matched packet will be written.\n"
-"  -B begin\n"
-"  -E end\n"
+	fprintf(stderr, "PcapSelectL3 [-T timezone offset] options InputFiles....\n"
+"  -s begin[unixtime]\n"
+"  -l length[sec]\n"
 "  -e exact_match_time (multiple, max 10)\n"
-"  -a ipaddr[#port],...   set ipaddress match list client side\n"
+"  -a ipaddr[#port],ipaddr/mask...   set ipaddress match list client side\n"
 "  -I file      Load IPaddrlist into list1\n"
-"  -b ipaddr#port[,ipaddr#port,..]  set ipaddress match list server side\n"
-"  -f list	specify TLD/root server IP address list file\n"
-"  -t TLD Match specify ipaddress match list server side to TLD servers\n"
-"	    requires -f option\n"
+"  -b ipaddr#port[,ipaddr/mask,ipaddr#port,..]  set ipaddress match list server side\n"
 "  -T       TCP only\n"
 "  -U       UDP only\n"
 "  -Q       Query (source== -a list, dest== -b list)\n"
 "  -R       Response (query== -b list, dest== -a list)\n"
 "  -S       Single file\n"
+"  -i       ignore short read\n"
 "  -n NN    Cut NN packets\n"
-"fragment\n"
+"  -o file  OutputFile\n"
 "  -f\n");
 
 	exit(0);
@@ -751,41 +599,37 @@ void parse_args(int argc, char **argv, char *env)
 {
 	int ch;
 
-	while ((ch = getopt_env(argc, argv, "vB:E:O:E:46a:b:f:t:FI:SsHL:TUn:QRe:", env)) != -1) {
+	while ((ch = getopt_env(argc, argv, "mivs:l:O:E:46a:b:f:t:FI:SsHL:TUn:QRe:o:", env)) != -1) {
 	switch (ch) {
 	case 'Q': accept_query = 1; break;
 	case 'R': accept_reply = 1; break;
 	case 'F': accept_frag = 1; break;
 	case '4': accept_v4 = 1; break;
 	case '6': accept_v6 = 1; break;
-	case 'B': begin = (long long)(atof(optarg) * 1000000.0); break;
-	case 'E': end = (long long)(atof(optarg) * 1000000.0); break;
+	case 's': begin = (long long)(atof(optarg) * 1000000.0); break;
+	case 'l': length = (long long)(atof(optarg) * 1000000.0); break;
 	case 'O': time_offset = atoi(optarg); break;
 	case 'e':
 		exact[nexact++] = atof(optarg);
 		/*printf("-E %s is parsed as tv_sec=%d tv_usec=%d\n", optarg, exact_time_sec, exact_time_usec);*/
 		break;
 	case 'a':
-		register_ipaddr_port_hash(optarg, &ipaddr1_hash);
+		register_ipaddr_port_hash(optarg, &ipaddr1_list, opt_v);
 		break;
 	case 'b':
-		register_ipaddr_port_hash(optarg, &ipaddr2_hash);
+		register_ipaddr_port_hash(optarg, &ipaddr2_list, opt_v);
 		break;
 	case 'v': opt_v++; break;
-	case 'I': load_ipaddrlist(optarg, &ipaddr1_hash); break;
-	case 'f': serverlist_file = optarg; break;
-	case 't': if (serverlist_file != NULL) {
-		  	load_ipaddrlist_tld(optarg, &ipaddr1_hash);
-			break;
-		  }
-		  err(1, "specify TLD server list\n");
+	case 'I': load_ipaddrlist(optarg, &ipaddr1_list); break;
 	case 'S': single_file = 1; break;
-	case 's': ignore_shortread = 1; break;
+	case 'i': ignore_shortread = 1; break;
 	case 'L': Logfile = optarg; break;
 	case 'H': print_hash = 1; break;
 	case 'T': accept_tcp = 1; break;
 	case 'U': accept_udp = 1; break;
+	case 'o': OutputFile = optarg; break;
 	case 'n': cut_num_packets = atoi(optarg); break;
+	case 'm': break; // ignore
 	case '?':
 	default:
 		usage(ch);
@@ -796,7 +640,7 @@ int main(int argc, char *argv[])
 {
 	int len;
 	int ret;
-	FILE *wfp;
+	FILE *wfp = stdout;
 	char *env;
 	char *argvv[10];
 	struct pcap_file_header pfw;
@@ -807,12 +651,13 @@ int main(int argc, char *argv[])
 	parse_args(argc, argv, env);
 	argc -= optind;
 	argv += optind;
+	if (begin > 0) end = begin + length;
 	if (print_hash) {
-		printf("begin=%lld end=%lld\n", begin, end);
-		printf("ipaddr1_hash=\n");
-		print_ipaddrlist_hash(ipaddr1_hash);
-		printf("ipaddr2_hash=\n");
-		print_ipaddrlist_hash(ipaddr2_hash);
+		fprintf(stderr, "begin=%lld end=%lld length=%lld\n", begin, end, length);
+		fprintf(stderr, "ipaddr1_hash=\n");
+		print_ipaddrlist_hash(&ipaddr1_list);
+		fprintf(stderr, "ipaddr2_hash=\n");
+		print_ipaddrlist_hash(&ipaddr2_list);
 		exit(1);
 	}
 	if (accept_v4 == 0 && accept_v6 == 0) {
@@ -825,9 +670,12 @@ int main(int argc, char *argv[])
 		accept_query = 1;
 		accept_reply = 1;
 	}
-	if (argc < 1) { usage(-1); }
-	if ((wfp = fopen(*argv, "wx")) == NULL) {
-		printf("#Wrror:Cannot write %s", *argv); exit(1);
+	if (argc == 0 && isatty(fileno(stdin))) { usage(0); }
+	if (OutputFile != NULL) {
+		if ((wfp = fopen(OutputFile, "wx")) == NULL) {
+			fprintf(stderr, "#Wrror:Cannot write %s", OutputFile);
+			exit(1);
+		}
 	}
 	pfw.magic = 0xa1b2c3d4;
 	pfw.version_major = 2;
@@ -837,15 +685,12 @@ int main(int argc, char *argv[])
 	pfw.snaplen = 1500;
 	pfw.linktype = DLT_IP;
 	fwrite(&pfw, sizeof(pfw), 1, wfp);
-	argv++;
-	argc--;
 	if (Logfile != NULL) {
 		if ((LogFP = fopen(Logfile, "w")) == NULL) {
-			printf("#Error:CannotOpenLogfile:%s\n", Logfile);
+			fprintf(stderr, "#Error:CannotOpenLogfile:%s\n", Logfile);
 			exit(1);
 		}
 	}
-	if (argc == 0 && isatty(fileno(stdin))) { usage(0); }
 	if (argc > 0) {
 		ret = pcap_cleanup(wfp, argc, argv);
 		if (ignore_shortread != 0 && ret == ParsePcap_ERROR_ShortRead) {
@@ -870,10 +715,11 @@ int main(int argc, char *argv[])
 				exit(0);
 			}
 			if (ret != ParsePcap_NoError) {
-				printf("#Error:%s:errno=%d\n", pcap_cleanup_error(ret), errno);
+				fprintf(stderr, "#Error:%s:errno=%d\n", pcap_cleanup_error(ret), errno);
 				exit(1);
 			}
 		}
 	}
+	if (OutputFile != NULL) fclose(wfp);
 	exit(0);
 }

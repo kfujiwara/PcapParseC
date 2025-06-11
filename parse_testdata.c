@@ -1,5 +1,5 @@
 /*
-	$Id: parse_testdata.c,v 1.3 2024/05/09 15:15:28 fujiwara Exp $
+	$Id: parse_testdata.c,v 1.6 2025/04/17 06:55:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -11,25 +11,18 @@
 	written in JPRS-OSCL.txt.
 */
 
-#include "config.h"
 
 #include <stdio.h>
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/socket.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
-#endif
-#ifdef HAVE_ERR_H
 #include <err.h>
-#endif
 
 #include "ext/uthash.h"
+
+#include "config.h"
 #include "mytool.h"
-#include "PcapParse.h"
+#include "pcapparse.h"
 #include "parse_DNS.h"
 
 /*
@@ -173,7 +166,7 @@ int parse_testdata(struct DNSdataControl* c)
 				c->dns.label[j] = p;
 			}
 		} else if (strcmp((char *)p, "node") == 0) {
-			c->nodeid = add_node_name(c, q);
+			c->current_nodeid = add_node_name(c, q);
 		} else if (strcmp(p, "error") == 0) {
 			c->dns.error = atoi(q);
 		} else if (strcmp(p, "ednssize") == 0) {

@@ -1,5 +1,5 @@
 /*
-	$Id: parse_DNS.c,v 1.3 2024/05/10 09:44:04 fujiwara Exp $
+	$Id: parse_DNS.c,v 1.10 2025/05/01 10:06:07 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -12,26 +12,16 @@
 */
 
 #include <stdio.h>
-
-#include "config.h"
-
-#ifdef HAVE_CTYPE_H
 #include <ctype.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
-#endif
-#ifdef HAVE_SYS_TYPES_H
 #include <sys/socket.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
-#endif
 
 #include "ext/uthash.h"
 
+#include "config.h"
 #include "mytool.h"
-#include "PcapParse.h"
+#include "pcapparse.h"
 #include "parse_int.h"
 
 unsigned long long int get_uint32(struct DNSdata *d)
@@ -182,7 +172,9 @@ int get_dname(struct DNSdata *d, char *o, int o_len, int mode, struct case_stats
 			if (mode & GET_DNAME_SEPARATE) {
 				if (nlabel >= PcapParse_LABELS)
 					return -1;
-				d->label[nlabel++] = (char *)wp;
+				d->label[nlabel] = (char *)wp;
+				d->labellen[nlabel] = *p;
+				nlabel++;
 				labelcopy_bind9(wp, p+1, *p, NULL, mode);
 				wp[*p] = 0;
 				wp += *p + 1;
@@ -293,10 +285,11 @@ fflush(stdout);
 				keytag = (p[0] << 8) | p[1];
 				p += 2;
 				optlen -= 2;
-				if (keytag == 0x4a5c) {
-					d->dns._edns_keytag_4a5c = 1;
-				} else if (keytag == 0x4f66) {
-					d->dns._edns_keytag_4f66 = 1;
+				switch(keytag) {
+				case 0x4a5c: d->dns._edns_keytag_4a5c = 1;break;
+				case 0x4f66: d->dns._edns_keytag_4f66 = 1;break;
+				case 0x9728: d->dns._edns_keytag_9728 = 1;break;
+				default: d->dns._edns_keytag_other = 1; break;
 				}
 			}
 			break;
@@ -362,6 +355,7 @@ void parse_DNS_query(struct DNSdataControl *d)
 		d->ParsePcapCounter._edns_error++;
 	d->ParsePcapCounter._parsed_dnsquery++;
 	d->dns.datatype = DATATYPE_DNS;
+	prepare_dns_substring(d);
 	(void)(d->callback)(d, CALLBACK_PARSED);
 }
 
@@ -428,11 +422,6 @@ void parse_DNS_answer(struct DNSdataControl *d)
 	d->dns.soa_ttl = -1;
 	*(d->dns.soa_dom) = 0;
 
-	if (d->do_address_check)
-		if (!d->callback(d, CALLBACK_ADDRESSCHECK)) {
-			d->ParsePcapCounter._unknown_ipaddress++;
-			return;
-		}
 	d->ParsePcapCounter._before_checking_dnsheader++;
 	if (d->dns._opcode != 0) return;
 	if (d->dns.dns[4] != 0 && d->dns.dns[5] != 1) return;
@@ -482,13 +471,13 @@ void parse_DNS_answer(struct DNSdataControl *d)
 						strcpy((char *)qtype_name, (char *)buff);
 					}
 					if (l == 1 && n == 4) {
-						if (d->dns.n_ans_v4 < 16) {
+						if (d->dns.n_ans_v4 < PcapParse_Naddr) {
 							memcpy(&d->dns.ans_v4[d->dns.n_ans_v4], d->dns.dns + d->dns.pointer, n);
 							d->dns.n_ans_v4++;
 						}
 					} else
 					if (l == 28 && n == 16) {
-						if (d->dns.n_ans_v6 < 16) {
+						if (d->dns.n_ans_v6 < PcapParse_Naddr) {
 							memcpy(&d->dns.ans_v6[d->dns.n_ans_v6], d->dns.dns + d->dns.pointer, n);
 							d->dns.n_ans_v6++;
 						}
@@ -620,6 +609,7 @@ void parse_DNS_answer(struct DNSdataControl *d)
 		d->dns._answertype = _ANSWER_UNKNOWN;
 	}
 	d->dns.datatype = DATATYPE_DNS;
+	prepare_dns_substring(d);
 	(void)(d->callback)(d, CALLBACK_PARSED);
 }
 
@@ -643,12 +633,6 @@ void parse_DNS(struct DNSdataControl *d)
 	d->dns._ancount = (d->dns.dns[6] << 8) | d->dns.dns[7];
 	d->dns._nscount = (d->dns.dns[8] << 8) | d->dns.dns[9];
 	d->dns._arcount = (d->dns.dns[10] << 8) | d->dns.dns[11];
-	if (d->do_address_check) {
-		if (d->callback(d, CALLBACK_ADDRESSCHECK) == 0) {
-			d->ParsePcapCounter._unknown_ipaddress++;
-			return;
-		}
-	}
 	if (d->dns._qr != 0 && (d->mode & MODE_PARSE_ANSWER) != 0) {
 		parse_DNS_answer(d);
 	}
