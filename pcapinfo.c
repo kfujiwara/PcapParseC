@@ -1,5 +1,5 @@
 /*
-	$Id: pcapinfo.c,v 1.21 2025/04/24 04:28:34 fujiwara Exp $
+	$Id: pcapinfo2.c,v 1.1 2025/07/15 10:32:35 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -111,12 +111,14 @@ u_long swap32(u_int32_t x)
 }
 
 typedef struct pcap_result {
+	long long mtime;
 	char *type;
 	long long start;
 	long long end;
 	long long count;
 	long long size;
 	long long readsize;
+	char hash[512];
 } pcap_result;
 
 int read_pcap(FILE *fp, pcap_result *result, int needswap)
@@ -290,11 +292,13 @@ int parse_file(char *file, pcap_result *result)
 	int len, extlen, ret;
 	int close_status = 0;
 	struct compressed_files *cp = compressed_files;
+	char *p;
 	struct stat sb;
 	char buff[1024];
 
 	if (stat(file, &sb) == 0) {
 		result->size = sb.st_size;
+		result->mtime = sb.st_mtim.tv_sec * 1000000 + sb.st_mtim.tv_nsec / 1000;
 	}
 	len = strlen(file);
 	while (cp->extention != NULL) {
@@ -321,6 +325,20 @@ int parse_file(char *file, pcap_result *result)
 	}
 	if (ret == 0 && close_status > 0)
 		fprintf(stderr, "fclose_returned:%d/%d:%s errno=%d\n", close_status, ret, file, errno);
+	snprintf(buff, sizeof buff, "openssl sha256 -r %s", file);
+	result->hash[0] = 0;
+	if ((fp = popen(buff, "r")) == NULL)
+		ret = -1;
+	else {
+		if (fgets(buff, sizeof buff, fp) != NULL) {
+			p = strchr(buff, ' ');
+			if (p != NULL) {
+				*p = 0;
+				strncpy(result->hash, buff, sizeof(result->hash));
+			}
+		}
+		close_status = pclose(fp);
+	}
 	return ret;
 }
 
@@ -340,7 +358,7 @@ int main(int argc, char *argv[])
 		r = parse_file(argv[i], &t);
 		tt2 = now() - tt1;
 		if (tt2 == 0) tt2 = 1;
-		printf("%s,%s,%lld,%lld,%lld,%lld,%lld,%lld\n", argv[i], t.type, t.start, t.end, t.count, t.size, t.readsize, tt2);
+		printf("%s,%s,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%s\n", argv[i], t.type, t.start, t.end, t.count, t.size, t.readsize, tt2, t.mtime, t.hash);
 		v1 = tt2 / 1000000.0;
 		v2 = t.count / v1;
 		v3 = t.readsize / v1 / 1024 / 1024;

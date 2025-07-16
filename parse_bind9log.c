@@ -1,5 +1,5 @@
 /*
-	$Id: parse_bind9log.c,v 1.16 2025/05/01 10:06:07 fujiwara Exp $
+	$Id: parse_bind9log.c,v 1.17 2025/07/14 04:29:57 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -306,6 +306,7 @@ int parse_bind9log(struct DNSdataControl* c)
 			p += len + 1;
 		}
 		q = strchr(p, ' ');
+		if (q == NULL) return err_qname;
 		*q = 0;
 		c->dns.qclass = str2class(p);
 		if (c->dns.qclass < 0) return err_class;
@@ -351,7 +352,7 @@ int parse_bind9log(struct DNSdataControl* c)
 				memcpy(s_dst, p, q - p);
 				s_dst[q-p] = 0;
 				if (inet_pton(c->dns.af, s_dst, ip_dst) != 1) {
-					fprintf(stderr, "Unparseable [%s] af=%d\n", s_dst, c->dns.af);
+					fprintf(stderr, "Unparseable [%s] af=%d lineno=%d\n", s_dst, c->dns.af, c->lineno);
 					return err_server;
 				}
 				c->dns.p_dst = ip_dst;
