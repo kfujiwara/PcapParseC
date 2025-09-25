@@ -1,5 +1,5 @@
 /*
-	$Id: parse_L3.c,v 1.19 2025/05/30 09:00:19 fujiwara Exp $
+	$Id: parse_L3.c,v 1.23 2025/09/25 08:29:59 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -84,7 +84,8 @@ unsigned int try_fix_ipv4address2(struct DNSdataControl *d, unsigned int sum0)
 		return sum0;
 	}
 	a3 = addrp[2];
-	a4 = addrp[2];
+	a4 = addrp[3];
+	memcpy(d->dns.origaddr, addrp, 4);
 	//hexdump("try_fix_ipaddr: ", _ip, len);
 	// try fix
 	sum1 = sum0 - (a3 << 8);
@@ -147,6 +148,7 @@ unsigned int try_ipv4_fixaddr(struct DNSdataControl *d)
 		sport = d->dns.p_sport;
 	}
 	a4 = addrp[3];
+	memcpy(d->dns.origaddr, addrp, 4);
 	sum1 = sum0 - a4;
 	//hexdump("try_fix_ipaddr: ", _ip, len);
 	// try fix
@@ -198,6 +200,7 @@ void check_ipv6_checksum(struct DNSdataControl *d)
 			+ ntohs(sump[2]) + ntohs(sump[3]);
 		sum1 = sum0 - sum2;
 		HASH_FIND(hh, d->v6hash, addrp, 8, f);
+		memcpy(d->dns.origaddr, addrp, 16);
 		if (f != NULL && f->used > 0) {
 			for (i = 0; i < f->used; i++) {
 				if (checksum16(sum1 + f->sump[i]) == 0xffff) {
@@ -296,7 +299,7 @@ void parse_L3(struct DNSdataControl *d)
 			d->dns.partial = 1;
 		}
 #if 0
-		if (d->dns.iplen > d->dns.len && d->dns.iplen - d->dns.len <= 4 && d->dns.iplen < 1500) {
+		if (d->dns.iplen > d->dns.len && d->dns.iplen - d->dns.len <= 4 && d->dns.iplen <= ETHERNET_MTU) {
 			memset(d->dns._ip + d->dns.len, 0, d->dns.iplen - d->dns.len);
 			d->dns.len = d->dns.iplen;
 		}
@@ -453,22 +456,17 @@ int parse_L2(struct pcap_header *ph, struct DNSdataControl* c)
 {
 	int l2header = 0;
 
-	if (c->linktype == DLT_NULL || c->linktype == LINKTYPE_OPENBSD_LOOP) {
-		l2header = 4;
-	} else
-	if (c->linktype == DLT_EN10MB) {
+	switch(c->linktype) {
+	case DLT_NULL: case DLT_OPENBSD_LOOP: l2header = 4; break;
+	case DLT_EN10MB: l2header = 14;
 		if (c->l2[12] == 0x81 && c->l2[13] == 0) { /* VLAN */
 			l2header = 18;
-		} else {
-			l2header = 14;
 		}
-	} else
-	if (c->linktype == DLT_LINUX_SLL) {
-		l2header = 16;
-	} else
-	if (c->linktype == DLT_IP || c->linktype == DLT_RAW) {
-		l2header = 0;
-	} else {
+		break;
+	case DLT_LINUX_SLL: l2header = 16; break;
+	case DLT_LINUX_SLL2: l2header = 20; break;
+	case DLT_IP: case DLT_RAW: l2header = 0; break;
+	default:
 		printf("#Error:unknownLinkType:%d", c->linktype);
 		return ParsePcap_ERROR_UnknownLinkType;
 	}
@@ -482,11 +480,24 @@ int parse_L2(struct pcap_header *ph, struct DNSdataControl* c)
 	c->dns.ts = ph->ts.tv_sec * 1000000LU + ph->ts.tv_usec;
 	if (c->ParsePcapCounter.first_ts == 0) {
 		c->ParsePcapCounter.first_ts = c->dns.ts;
+	} else
+	if (c->dns.ts == c->prev_ts && c->dns.len == c->prev_len) {
+		if (memcmp(c->dns._ip, c->prev_packet, c->dns.len) == 0) {
+			// ignore same packet
+			return 0;
+		}
 	}
 	c->ParsePcapCounter.last_ts = c->dns.ts;
 	if (c->do_scanonly == 0)
 		parse_L3(c);
 	c->ParsePcapCounter._pcap++;
+	if (c->dns.len > ETHERNET_MTU) {
+		c->prev_ts = 0; c->prev_len = 0;
+	} else {
+		c->prev_ts = c->dns.ts;
+		c->prev_len = c->dns.len;
+		memcpy(c->prev_packet, c->dns._ip, c->dns.len);
+	}
 	return 0;
 }
 

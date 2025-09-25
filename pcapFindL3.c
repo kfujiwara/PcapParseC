@@ -1,5 +1,5 @@
 /*
-	$Id: pcapFindL3.c,v 1.47 2025/06/04 08:14:20 fujiwara Exp $
+	$Id: pcapFindL3.c,v 1.48 2025/09/24 12:24:23 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -22,6 +22,7 @@
 #include <arpa/inet.h>
 
 #include "ext/uthash.h"
+#include "pcap_data.h"
 
 #include "config.h"
 #include "pcapparse.h"
@@ -76,34 +77,6 @@ void hexdump(char *msg, u_char *data, int len)
 
 static struct ipaddr_port_list ipaddr1_list = { NULL, 0};
 static struct ipaddr_port_list ipaddr2_list = { NULL, 0};
-
-/*
-			Supported Linktype: DLT_NULL, DLT_EN10MB, DLT_IP, DLT_LINUX_SLL
- */
-
-struct pcap_file_header {
-	u_int32_t magic;
-	u_short version_major;
-	u_short version_minor;
-	int32_t thiszone;	/* gmt to local correction */
-	u_int32_t sigfigs;	/* accuracy of timestamps */
-	u_int32_t snaplen;	/* max length saved portion of each pkt */
-	u_int32_t linktype;	/* data link type (LINKTYPE_*) */
-};
-
-struct pcap_header {
-	struct pcap_timeval {
-		u_int32_t tv_sec;	/* seconds */
-		u_int32_t tv_usec;	/* microseconds */
-	} ts;				/* time stamp */
-	int32_t caplen;	/* length of portion present */
-	int32_t len;	/* length this packet (off wire) */
-};
-#define DLT_NULL	0	/* BSD loopback encapsulation */
-#define DLT_EN10MB	1	/* Ethernet (10Mb) */
-#define	DLT_IP		101	/* IP packet directly */
-#define DLT_LINUX_SLL	113	/* Linux cocked */
-//#define DLT_RAW		12	/* _ip IP */
 
 #define SUBDIRLEN 65
 
@@ -274,18 +247,13 @@ int pcap_open(struct PcapFiles *pcap, char *file)
 		fprintf(stderr, "BogusPcapHeader:%x:%s\n", pcap->pf.magic, pcap->path);
 	}
 	if (error == 0) {
-		if (pcap->pf.linktype == DLT_NULL) {
-			pcap->l2header = 4;
-		} else
-		if (pcap->pf.linktype == DLT_EN10MB) {
-			pcap->l2header = 14;
-		} else
-		if (pcap->pf.linktype == DLT_LINUX_SLL) {
-			pcap->l2header = 16;
-		} else
-		if (pcap->pf.linktype == DLT_IP) {
-			pcap->l2header = 0;
-		} else {
+		switch(pcap->pf.linktype) {
+		case DLT_NULL: case DLT_OPENBSD_LOOP: pcap->l2header=4; break;
+		case DLT_EN10MB: pcap->l2header = 14; break;
+		case DLT_LINUX_SLL: pcap->l2header = 16; break;
+		case DLT_LINUX_SLL2: pcap->l2header = 20; break;
+		case DLT_IP: pcap->l2header = 0; break;
+		default:
 			fprintf(stderr, "#Error:unknownLinkType:%d", pcap->pf.linktype);
 			error = ParsePcap_ERROR_UnknownLinkType;
 		}

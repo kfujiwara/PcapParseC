@@ -22,8 +22,9 @@ struct pcap_header {
 #define DLT_EN10MB	1	/* Ethernet (10Mb) */
 #define	DLT_IP		101	/* IP packet directly */
 #define DLT_LINUX_SLL	113	/* Linux cocked */
+#define DLT_LINUX_SLL2	276	/* Linux cocked */
 #define DLT_RAW		12	/* _ip IP */
-#define	LINKTYPE_OPENBSD_LOOP	108
+#define	DLT_OPENBSD_LOOP	108
 
 struct pcapng_section_header3 {
 	u_int32_t block_type;

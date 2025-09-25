@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.191 2025/06/04 11:03:47 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.192 2025/08/21 07:12:52 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -65,6 +65,8 @@ int do_print_hexdump = 0;
 int both_direction = 0;
 int print_limit = 0;
 
+int ignore_broken = 0;
+int ignore_nobroken = 0;
 int ignore_EDNS = 0;
 int ignore_noEDNS = 0;
 int ignore_CD = 0;
@@ -89,7 +91,6 @@ int ignore_ANCOUNT0 = 0;
 int ignore_noANCOUNT0 = 0;
 int ignore_REF = 0;
 int ignore_noREF = 0;
-int inverse_match_qname = 0;
 int print_tcp_delay_longer_than = -1;
 int print_tcp_delay_shorter_than = -1;
 
@@ -97,6 +98,8 @@ static struct ignore_options {
 	char *name;
 	int *variable;
 } ignore_options[] = {
+	{ "broken", &ignore_broken },
+	{ "nobroken", &ignore_nobroken },
 	{ "v4", &ignore_v4 },
 	{ "v6", &ignore_v6 },
 	{ "EDNS", &ignore_EDNS },
@@ -123,7 +126,6 @@ static struct ignore_options {
 	{ "noANCOUNT0", &ignore_noANCOUNT0 },
 	{ "REF", &ignore_REF },
 	{ "noREF", &ignore_noREF },
-	{ "QNAME", &inverse_match_qname },
 	{ NULL, NULL },
 };
 
@@ -751,7 +753,7 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 		hexdump("", d->dns.dns, d->dns.dnslen);
 	if (print_queries_debug) print_debug(d);
 	count_printed++;
-	if (print_limit > 0 && count_printed >= print_limit) exit(0);
+	if (print_limit > 0 && count_printed >= print_limit) d->exit = 1;
 	return 0;
 }
 
@@ -824,9 +826,8 @@ void usage(int c)
 "-N file Load qname list file and print packets whose qname matches\n"
 "-n qname  Sepficy qname: print packets whose qname matches\n"
 "-x XX,XX,XX : Exclude queries\n"
-"   XX: v4,v6,TCP,UDP,OPCODE0,noOPCODE0,EDNS,noEDNS,DO,noDO,AD,noAD,RD,noRD,\n"
-"       TC,noTC,RCODE0,noRCODE0,ANCOUNT0,noANCOUNT0,noREF,REF (response)\n"
-"       QNAME (inverse -n/-N options)\n"
+"   XX: v4,v6,TCP,UDP,broken,nobroken,OPCODE0,noOPCODE0,EDNS,noEDNS,DO,noDO,\n"
+"       AD,noAD,RD,noRD,TC,noTC,RCODE0,noRCODE0,ANCOUNT0,noANCOUNT0,noREF,REF\n"
 "-p XX,XX,XX : Print DNS answer options\n"
 "       RefNS,RefGlue,RefDS,AuthSOA,AnsA,AnsAAAA,AnsNS,AnsDS,AnsCNAME,AnsPTR,ALLRR\n"
 "       EDNSSIZE/FLAG/DNSLEN... print edns0udpsize,flag,dnslen on DNS query/answer\n"
@@ -1058,6 +1059,7 @@ int main(int argc, char *argv[])
 	c.enable_tcp_state = 0;
 	c.do_scanonly =0;
 	c.debug = 0;
+	c.exit = 0;
 	parse_args(argc, argv, env, &c);
 	argc -= optind;
 	argv += optind;
@@ -1084,6 +1086,7 @@ int main(int argc, char *argv[])
 	c.callback = pcapgetquery_callback;
 	c.rawlen = 65536;
 	c.raw = my_malloc(c.rawlen);
+	c.verbose = flag_v;
 
 	if (print_tcpsyn) { c.enable_tcpsyn_callback = 1; }
 
@@ -1103,6 +1106,8 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "Loading %s.\n", p);
 				fflush(stderr);
 			}
+			count_printed = 0;
+			c.exit = 0;
 			if (c.do_scanonly) {
 				memset(&c.ParsePcapCounter, 0, sizeof(c.ParsePcapCounter));
 				ret = parse_file(p, &c, 0);
@@ -1137,7 +1142,9 @@ int main(int argc, char *argv[])
 					c.current_nodeid = add_node_name(&c, c.node);
 				}
 			}
-printf("Loading %s\n", buff2);
+			if (flag_v) printf("Loading %s\n", buff2);
+			count_printed = 0;
+			c.exit = 0;
 			ret = parse_file(buff2, &c, 0);
 			if (ret != ParsePcap_NoError) {
 				printf("#Error:%s:%s:errno=%d\n", parse_file_error(ret), buff2, errno);

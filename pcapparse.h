@@ -1,5 +1,5 @@
 /*
-	$Id: pcapparse.h,v 1.123 2025/05/30 08:19:43 fujiwara Exp $
+	$Id: pcapparse.h,v 1.126 2025/09/25 08:29:59 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -32,6 +32,7 @@
 #define	u_int16_t	uint16_t
 #endif
 
+#define	ETHERNET_MTU	1500
 #define	PcapParse_DNAMELEN	1280
 #define	PcapParse_LABELS		32
 #define	PcapParse_nSubstring		5
@@ -55,6 +56,7 @@ struct DNSdata
   u_char *p_dst;
   u_short p_sport;
   u_short p_dport;
+  u_char origaddr[16];
   u_char portaddr[54]; // srcport, srcaddr, dstport, dstaddr, srport, srcaddr // portaddrlen*3
   u_char portaddrlen;  // 2+alen
   u_char *_ip;
@@ -253,7 +255,9 @@ struct DNSdataControl {
   int linktype;
   int caplen;
   int lineno;
+  int exit;
   int print_answer_options;
+  int verbose;
 #ifdef IPV6_PREFIX_HASH  
   struct ipv6_prefix_hash *v6hash;
 #else
@@ -262,6 +266,10 @@ struct DNSdataControl {
   u_char *raw;
   int rawlen;
   u_char *l2;
+// to ignore same packets (for 2024 k-root)
+  int64_t prev_ts;
+  int prev_len;
+  u_char prev_packet[ETHERNET_MTU];
 };
 
 int parse_file(char *file, struct DNSdataControl*d, int pass);
