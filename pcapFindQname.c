@@ -1,5 +1,5 @@
 /*
-	$Id: pcapFindQname.c,v 1.23 2025/08/21 07:12:52 fujiwara Exp $
+	$Id: pcapFindQname.c,v 1.25 2026/02/19 10:42:57 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -26,37 +26,7 @@
 #include "config.h"
 #include "pcapparse.h"
 #include "name_match.h"
-
-/*****************************************************************************
-	 Warning
-			Little endian only
-			Supported Linktype: 0==PPP	1==Ether
- *****************************************************************************
- */
-
-struct pcap_file_header {
-	u_int32_t magic;
-	u_short version_major;
-	u_short version_minor;
-	int32_t thiszone;	/* gmt to local correction */
-	u_int32_t sigfigs;	/* accuracy of timestamps */
-	u_int32_t snaplen;	/* max length saved portion of each pkt */
-	u_int32_t linktype;	/* data link type (LINKTYPE_*) */
-};
-
-struct pcap_header {
-	struct pcap_timeval {
-		u_int32_t tv_sec;	/* seconds */
-		u_int32_t tv_usec;	/* microseconds */
-	} ts;				/* time stamp */
-	int32_t caplen;	/* length of portion present */
-	int32_t len;	/* length this packet (off wire) */
-};
-#define DLT_NULL	0	/* BSD loopback encapsulation */
-#define DLT_EN10MB	1	/* Ethernet (10Mb) */
-#define	DLT_IP		101	/* IP packet directly */
-#define DLT_LINUX_SLL	113	/* Linux cocked */
-#define DLT_RAW		12	/* _ip IP */
+#include "pcap_data.h"
 
 int debug = 0;
 int opt_v = 0;
@@ -85,7 +55,7 @@ int callback(struct DNSdataControl *c, int mode)
 	if (end >= 0 && c->dns.ts >= end) return 0;
 	if (match_qname) {
 		p = (char *)c->dns.qname;
-		e = match_name(&name_list, c);
+		e = match_name(&name_list, c, MATCH_NAME_SUBDOMAIN);
 		if (e != NULL) match = 1;
 		//printf("match: qname=%s e=%lp\n", p, e);
 	}

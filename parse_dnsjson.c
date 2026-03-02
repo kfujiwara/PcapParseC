@@ -1,5 +1,5 @@
 /*
-	$Id: parse_dnsjson.c,v 1.15 2025/05/01 10:06:07 fujiwara Exp $
+	$Id: parse_dnsjson.c,v 1.16 2025/08/21 07:12:52 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -390,7 +390,7 @@ int _parse_dnsjson(FILE *fp, struct DNSdataControl *c)
 			fprintf(stderr, "Loaded %d lines from %s, %.1f secc, %.1f lines/sec, %.1f MB, %.1f MB/s\n", line1, c->filename, v1, v2, v3, v4);
 		}
 #endif
-	} while(fgets((char *)c->raw, c->rawlen, fp) != NULL);
+	} while(c->exit == 0 && fgets((char *)c->raw, c->rawlen, fp) != NULL);
 	tt = now() - c->open_time;
 	if (tt == 0) tt = 1;
 	v1 = tt / 1000000.0;

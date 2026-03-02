@@ -1,5 +1,5 @@
 /*
-	$Id: parse_bind9log.c,v 1.17 2025/07/14 04:29:57 fujiwara Exp $
+	$Id: parse_bind9log.c,v 1.18 2025/08/21 07:12:52 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -396,7 +396,7 @@ int _parse_bind9log(FILE *fp, struct DNSdataControl *c)
 			fprintf(stderr, "error%02d:%s: %s", ret, parse_bind9log_error[ret], buff);
 #endif
 		}
-	} while(fgets((char *)c->raw, c->rawlen, fp) != NULL);
+	} while(c->exit == 0 && fgets((char *)c->raw, c->rawlen, fp) != NULL);
 	tt = now() - c->open_time;
 	if (tt == 0) tt = 1;
 	v1 = tt / 1000000.0;

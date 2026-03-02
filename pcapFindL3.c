@@ -1,5 +1,5 @@
 /*
-	$Id: pcapFindL3.c,v 1.48 2025/09/24 12:24:23 fujiwara Exp $
+	$Id: pcapFindL3.c,v 1.49 2025/11/17 08:45:25 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -187,38 +187,57 @@ void copy_subdir_name(char *path, char *dest, int len)
 	}
 }
 
+static struct compressed_files
+{ char *extention;char *extractcmd; } compressed_files[] = {
+	{ ".gz", "gzip -cd %s" },
+	{ ".zst", "zstd -cd %s" },
+	{ ".xz", "xz -cd %s" },
+	{ ".bz2", "bzip2 -cd %s" },
+	{ NULL, NULL }
+};
+
 int pcap_open(struct PcapFiles *pcap, char *file)
 {
 	int error = 0;
+	struct compressed_files *cp = compressed_files;
+	FILE *fp;
+	int len, extlen, ret;
+	int byte;
+	int close_status = 0;
 	char buff[1024];
-	int len;
 
 	pcap->path = file;
 	len = strlen(file);
-	pcap->is_popen = 1;
+	pcap->is_popen = 0;
 
 	copy_subdir_name(file, pcap->subdir, sizeof(pcap->subdir));
 
-	if (len > 3 && strcmp(file+len-3, ".xz") == 0) {
-		snprintf(buff, sizeof buff, "xz -cd %s", file);
-	} else
-	if (len > 4 && strcmp(file+len-4, ".bz2") == 0) {
-		snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
-	} else
-	if (len > 4 && strcmp(file+len-4, ".zst") == 0) {
-		snprintf(buff, sizeof buff, "zstd -cd %s", file);
-	} else
-	if (len > 3 && strcmp(file+len-3, ".gz") == 0) {
-		snprintf(buff, sizeof buff, "gzip -cd %s", file);
-	} else {
-		buff[0] = 0;
-		pcap->is_popen = 0;
+	while (cp->extention != NULL) {
+		extlen = strlen(cp->extention);
+		if (len>extlen && strcmp(file+len-extlen, cp->extention) == 0) {
+			snprintf(buff, sizeof buff, cp->extractcmd, file);
+			if ((fp = popen(buff, "r")) == NULL)
+				return ParsePcap_ERROR_FILE_OPEN;
+			byte = getc(fp);
+			if (byte == EOF) {
+				// l-root 2016 dataset has .gz extention,
+				// However, it is compressed by bzip2.
+				pclose(fp);
+				snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
+				if (strcmp(cp->extention, ".gz") != 0
+				|| (fp = popen(buff, "r")) == NULL) {
+					return ParsePcap_ERROR_FILE_OPEN;
+				}
+			} else {
+				ungetc(byte, fp);
+			}
+			pcap->is_popen = 1;
+			break;
+		}
+		cp++;
 	}
 	if (pcap->is_popen) {
-		if ((pcap->fp = popen(buff, "r")) == NULL) {
-			fprintf(stderr, "Cannot Open %s", buff);
-			return ParsePcap_ERROR_FILE_OPEN;
-		}
+		pcap->fp = fp;
 	} else {
 		if ((pcap->fp = fopen(pcap->path, "r")) == NULL) {
 			fprintf(stderr, "Cannot Open %s", file);

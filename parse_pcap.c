@@ -1,5 +1,5 @@
 /*
-	$Id: parse_pcap.c,v 1.9 2025/05/29 09:30:52 fujiwara Exp $
+	$Id: parse_pcap.c,v 1.12 2025/12/25 10:26:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -74,7 +74,8 @@ int parse_pcap(FILE *fp, struct DNSdataControl *c, u_char *pcap_first_read, int 
 			pf.thiszone, pf.sigfigs);
 		printf("snaplen=%d  linktype=%d  needswap=%d\n", pf.snaplen, pf.linktype, needswap);
 	}
-	while((len = fread(&ph, 1, sizeof(ph), fp)) == sizeof(ph)) {
+	while(c->exit == 0 && 
+	      (len = fread(&ph, 1, sizeof(ph), fp)) == sizeof(ph)) {
 		offset += len;
 		if (ph.len == 0 || ph.caplen == 0) {
 			ph.ts.tv_usec = ph.caplen;
@@ -118,16 +119,18 @@ int parse_pcap(FILE *fp, struct DNSdataControl *c, u_char *pcap_first_read, int 
 #endif
 		if (error != 0) return error;
 	}
-			tt2 = now() - tt1;
-			if (tt2 == 0) tt2 = 1;
-			v1 = tt2 / 1000000.0;
-			v2 = npackets / v1;
-			v3 = offset / v1 / 1024.0/1024.0;
-			v4 = c->file_size / v1 / 1024.0/1024.0;
-			fprintf(stderr, "Loaded %lld packets from %s, %.1f sec, %.1f packets/sec, %.1f (%.1f) MB/s\n",
-				npackets, c->filename, v1, v2, v3, v4);
-			fflush(stderr);
-	if (len == 0) return 0;
+	if (c->verbose) {
+		tt2 = now() - tt1;
+		if (tt2 == 0) tt2 = 1;
+		v1 = tt2 / 1000000.0;
+		v2 = npackets / v1;
+		v3 = offset / v1 / 1024.0/1024.0;
+		v4 = c->file_size / v1 / 1024.0/1024.0;
+		fprintf(stderr, "Loaded %lld packets from %s, %.1f sec, %.1f packets/sec, %.1f (%.1f) MB/s\n",
+			npackets, c->filename, v1, v2, v3, v4);
+		fflush(stderr);
+	}
+	if (c->exit != 0 || len == 0) return 0;
 	if (c->debug & FLAG_INFO) {
 		printf("#Error:short read: %s\n",
 			(len == sizeof ph) ? "Packet data":"Pcap header");
@@ -154,20 +157,24 @@ int parse_pcapng(FILE *fp, struct DNSdataControl *c, u_char *pcap_first_read)
 		needswap = 1;
 	}
 	rest = needswap ? swap32(png3p->length) : png3p->length;
-	rest -= len;
-	//printf("needswap=%d rest=%d\n", needswap, rest);
-	if (fread(&c->raw, 1, rest, fp) != rest) {
+	rest -= PCAP_FIRST_READ;
+	//printf("needswap=%d rest=%d\n", needswap, rest);fflush(stdout);
+	if (fread(c->raw, 1, rest, fp) != rest) {
 		return ParsePcap_ERROR_BogusSavefile;
 	}
-	while((len = fread(&png2, 1, sizeof(png2), fp)) == sizeof(png2)) {
+	//hexdump("header rest\n", c->raw, rest);
+	while(c->exit == 0 &&
+              (len = fread(&png2, 1, sizeof(png2), fp)) == sizeof(png2)) {
 		offset += len;
 		rest = needswap ? swap32(png2.length) : png2.length;
 		rest -= sizeof(png2);
 		type = needswap ? swap32(png2.block_type) : png2.block_type;
+		//printf("fread: size=%d\n", rest); fflush(stdout);
 		len = fread(c->raw, 1, rest, fp);
+		//printf("fread: len=%d\n", len); fflush(stdout);
 		if (len != rest) return ParsePcap_ERROR_BogusSavefile;
 		//printf("type=%d len=%d\n", type, len);
-		//hexdump("data", c->raw, rest);
+		//hexdump("data", c->raw, rest);fflush(stdout);
 		if (type == 6) {
 			png6p = (struct pcapng_type6 *)c->raw;
 			ph.caplen = needswap?swap32(png6p->caplen):png6p->caplen;

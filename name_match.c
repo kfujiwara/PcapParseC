@@ -12,25 +12,25 @@
 #include "name_match.h"
 
 struct name_hash *
-match_name(struct name_list *list, struct DNSdataControl *c)
+match_name(struct name_list *list, struct DNSdataControl *c, int mode)
 {
 	struct name_hash *e = NULL;
-	uint16_t bit;
 	int i;
 
-	for (i = 0, bit = 1; i < c->dns.nsubstring && bit != 0; i++) {
-		if (list->nlabels & bit) {
-			HASH_FIND_STR((list->hash), c->dns.substring[i], e);
-			if (e != NULL) return e;
-		}
-		bit <<= 1;
+	if (mode == MATCH_NAME_EXACT) {
+		HASH_FIND_STR((list->hash), c->dns.qname, e);
+		return e;
+	}
+	for (i = 0; i < c->dns.nsubstring; i++) {
+		HASH_FIND_STR((list->hash), c->dns.substring[i], e);
+		if (e != NULL) return e;
 	}
 	return NULL;
 }
 
 void register_name_list(char *str, struct name_list *list, int opt_v)
 {
-	int comma, mask, len;
+	int len;
 	struct name_hash *e, *hash;
 	char *p, *q, *next, *r, *endp, *new;
 	char buff[256];
@@ -44,9 +44,6 @@ void register_name_list(char *str, struct name_list *list, int opt_v)
 		while(isalnum(*q) || *q == '.' || *q == '-') q++;
 		len = q - p;
 		if (len > 0 && len < 256) {
-			for (comma = 0, mask = 1, r = p; r < q; r++) {
-				if (*r == '.') { comma++; mask <<= 1; }
-			}
 			HASH_FIND_STR((list->hash), str, e);
 			if (e == NULL) {
 				e = malloc(sizeof(struct name_hash) + len);
@@ -55,7 +52,6 @@ void register_name_list(char *str, struct name_list *list, int opt_v)
 				e->count = 0;
 				HASH_ADD_STR((list->hash), name, e);
 				if (opt_v) printf("Match_qname:%s\n", e->name);
-				list->nlabels |= mask;
 			}
 		}
 		next = strchr(p, ',');
@@ -68,7 +64,6 @@ void print_name_list(struct name_list *list)
 {
 	struct name_hash *e, *tmp;
 
-	printf("nlabels=%04x\n", list->nlabels);
 	HASH_ITER(hh, (list->hash), e, tmp) {
 		printf(" %s\n", e->name);
 	}

@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.192 2025/08/21 07:12:52 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.195 2026/02/19 10:42:57 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -87,10 +87,16 @@ int ignore_OPCODE0 = 0;
 int ignore_noOPCODE0 = 0;
 int ignore_RCODE0 = 0;
 int ignore_noRCODE0 = 0;
+int ignore_RCODE3 = 0;
+int ignore_noRCODE3 = 0;
+int ignore_RCODE0_3 = 0;
+int ignore_noRCODE0_3 = 0;
 int ignore_ANCOUNT0 = 0;
 int ignore_noANCOUNT0 = 0;
 int ignore_REF = 0;
 int ignore_noREF = 0;
+int match_name_exact = 0;
+int match_name_nomatch = 0;
 int print_tcp_delay_longer_than = -1;
 int print_tcp_delay_shorter_than = -1;
 
@@ -122,10 +128,16 @@ static struct ignore_options {
 	{ "noOPCODE0", &ignore_noOPCODE0 },
 	{ "RCODE0", &ignore_RCODE0 },
 	{ "noRCODE0", &ignore_noRCODE0 },
+	{ "RCODE3", &ignore_RCODE3 },
+	{ "noRCODE3", &ignore_noRCODE3 },
+	{ "RCODE0_3", &ignore_RCODE0_3 },
+	{ "noRCODE0_3", &ignore_noRCODE0_3 },
 	{ "ANCOUNT0", &ignore_ANCOUNT0 },
 	{ "noANCOUNT0", &ignore_noANCOUNT0 },
 	{ "REF", &ignore_REF },
 	{ "noREF", &ignore_noREF },
+	{ "EXACT", &match_name_exact },
+	{ "noMATCH", &match_name_nomatch },
 	{ NULL, NULL },
 };
 
@@ -706,8 +718,8 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 		}
 	}
 	if (name_list.hash != NULL) {
-		e = match_name(&name_list, d);
-		if (e == NULL) return 0;
+		e = match_name(&name_list, d, match_name_exact?MATCH_NAME_EXACT:MATCH_NAME_SUBDOMAIN);
+		if ((e == NULL) ^ (match_name_nomatch != 0)) return 0;
 	}
 	if (flag_error_only && d->dns.error == 0) return 0;
 	if (ignore_EDNS && d->dns._edns0 != 0) return 0;
@@ -720,8 +732,12 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 	if (ignore_noRD && d->dns._rd == 0) return 0;
 	if (ignore_OPCODE0 && d->dns._opcode == 0) return 0;
 	if (ignore_noOPCODE0 && d->dns._opcode != 0) return 0;
-	if (ignore_RCODE0 && d->dns._opcode == 0) return 0;
-	if (ignore_noRCODE0 && d->dns._opcode != 0) return 0;
+	if (ignore_RCODE0 && d->dns._rcode == 0) return 0;
+	if (ignore_noRCODE0 && d->dns._rcode != 0) return 0;
+	if (ignore_RCODE3 && d->dns._rcode == 3) return 0;
+	if (ignore_noRCODE3 && d->dns._rcode != 3) return 0;
+	if (ignore_RCODE0_3 && (d->dns._rcode == 0 || d->dns._rcode == 3)) return 0;
+	if (ignore_noRCODE0_3 && (!(d->dns._rcode == 0 || d->dns._rcode == 3))) return 0;
 	if (ignore_REF && (d->dns._ancount == 0 && d->dns._rcode == 0 && d->dns._nscount != 0)) return 0;
 	if (ignore_noREF && (d->dns._ancount != 0 || d->dns._rcode != 0 || d->dns._nscount == 0)) return 0;
 	if (ignore_ANCOUNT0 && d->dns._ancount == 0) return 0;
@@ -827,7 +843,10 @@ void usage(int c)
 "-n qname  Sepficy qname: print packets whose qname matches\n"
 "-x XX,XX,XX : Exclude queries\n"
 "   XX: v4,v6,TCP,UDP,broken,nobroken,OPCODE0,noOPCODE0,EDNS,noEDNS,DO,noDO,\n"
-"       AD,noAD,RD,noRD,TC,noTC,RCODE0,noRCODE0,ANCOUNT0,noANCOUNT0,noREF,REF\n"
+"       AD,noAD,RD,noRD,TC,noTC,ANCOUNT0,noANCOUNT0,noREF,REF\n"
+"       RCODE0,noRCODE0,RCODE3,noRCODE3,RCODE0_3,noRCODE0_3\n"
+"-x EXACT: specify exact match on -n/-N\n"
+"-x noMATCH: specify unmatch on -n/-N\n"
 "-p XX,XX,XX : Print DNS answer options\n"
 "       RefNS,RefGlue,RefDS,AuthSOA,AnsA,AnsAAAA,AnsNS,AnsDS,AnsCNAME,AnsPTR,ALLRR\n"
 "       EDNSSIZE/FLAG/DNSLEN... print edns0udpsize,flag,dnslen on DNS query/answer\n"

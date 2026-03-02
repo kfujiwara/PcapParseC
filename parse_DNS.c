@@ -1,5 +1,5 @@
 /*
-	$Id: parse_DNS.c,v 1.10 2025/05/01 10:06:07 fujiwara Exp $
+	$Id: parse_DNS.c,v 1.13 2026/02/02 10:32:25 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -52,7 +52,10 @@ void labelcopy_ignorechar(u_char *dest, u_char *src, int count, struct case_stat
 
 	while (count-- > 0) {
 		c = *src;
-		if (c < 0x21 || c == ',' || c == ':' || c >= 0x7f) {
+		if (c < 0x20 || c > 0x7f) {
+			c = '!';
+			if (s != NULL) s->binary_char++;
+		} else if (c == ' ' || c == ',' || c == ':') {
 			c = '!';
 		} else {
 			if (s != NULL) {
@@ -72,6 +75,7 @@ int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s, 
 {
 	u_char c;
 	int n = 0;
+
 	while (count-- > 0) {
 		c = *src++;
 		switch(c) {
@@ -80,14 +84,14 @@ int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s, 
 			*dest++ = '\\';
 			*dest++ = c;
 			n+=2;
+			if (s != NULL) s->nocase++;
 			break;
 		default:
 			if (c > 0x20 && c < 0x7f) {
 				if (s != NULL) {
 					if (islower(c)) { s->lowercase++; }
-					else if (isupper(c)) {
-						s->uppercase++;
-					} else { s->nocase++; }
+					else if (isupper(c)) { s->uppercase++; }
+					else { s->nocase++; }
 				}
 				if (mode & GET_DNAME_LOWERCASE && isupper(c))
 					c = tolower(c);
@@ -98,6 +102,7 @@ int labelcopy_bind9(u_char *dest, u_char *src, int count, struct case_stats *s, 
 				*dest++ = '0' + ((c / 10) % 10);
 				*dest++ = '0' + (c % 10);
 				n += 4;
+				if (s != NULL) s->binary_char++;
 			}
 			break;
 		}

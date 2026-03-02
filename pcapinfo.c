@@ -1,5 +1,5 @@
 /*
-	$Id: pcapinfo2.c,v 1.1 2025/07/15 10:32:35 fujiwara Exp $
+	$Id: pcapinfo.c,v 1.25 2025/12/25 10:26:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -28,6 +28,23 @@
 #include "pcap_data.h"
 #include "dns_string.h"
 #include "mytool.h"
+
+void print_t64(unsigned long long t64)
+{
+	struct tm tm;
+	time_t tv;
+	long tu;
+	char datestr[100];
+
+	tv = t64 / 1000000LL;
+	tu = t64 - tv * 1000000LL;
+
+        gmtime_r(&tv, &tm);
+        snprintf(datestr, sizeof datestr, "%04d/%02d/%02d %02d:%02d:%02d.%06d",
+		tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
+		tm.tm_hour, tm.tm_min, tm.tm_sec, tu);
+	printf("%s\n", datestr);
+}
 
 /*****************************************************************************
 	 Warning
@@ -121,12 +138,18 @@ typedef struct pcap_result {
 	char hash[512];
 } pcap_result;
 
-int read_pcap(FILE *fp, pcap_result *result, int needswap)
+int read_pcap(FILE *fp, struct pcap_file_header *pf, pcap_result *result, int needswap)
 {
 	struct pcap_header ph;
 	int len;
+	int rest;
+	u_char *p;
 	u_char buff[65536];
 
+	rest = sizeof(*pf) - PCAP_FIRST_READ;
+	p = (u_char *)pf + PCAP_FIRST_READ;
+	len = fread(p, 1, rest, fp);
+	if (len != rest) return 0; /* ignore */
 	result->start = 0;
 	while((len = fread(&ph, 1, sizeof(ph), fp)) == sizeof(ph)) {
 		result->readsize += len;
@@ -163,7 +186,8 @@ int read_pcapng(FILE *fp, struct pcap_file_header *pf, pcap_result *result)
 	       (struct pcapng_section_header3 *)(pf);
 	struct pcapng_section_header2 png2;
 	struct pcapng_type6 *png6p;
-	int len;
+	struct pcapng_type1 *png1p;
+	int len = PCAP_FIRST_READ;
 	int rest;
 	int type;
 	int needswap;
@@ -172,7 +196,6 @@ int read_pcapng(FILE *fp, struct pcap_file_header *pf, pcap_result *result)
 	u_char buff[65536];
 
 	result->start = 0;
-	//printf("magic=%lx length=%lx\n", png3p->magic, png3p->length);
 	if (png3p->magic == 0x1a2b3c4d) {
 		needswap = 0;
 	} else {
@@ -180,25 +203,31 @@ int read_pcapng(FILE *fp, struct pcap_file_header *pf, pcap_result *result)
 	}
 	rest = needswap ? swap32(png3p->length) : png3p->length;
 	rest -= len;
-	//printf("needswap=%d rest=%d\n", needswap, rest);
+	printf("magic=%lx length=%lx, needswap=%d rest=%d\n", png3p->magic, png3p->length, needswap, rest); fflush(stdout);
 	if (fread(buff, 1, rest, fp) != rest) {
 		return -1;
 	}
+	result->readsize += len;
+	//hexdump("png3 rest", buff, rest);
 	while((len = fread(&png2, 1, sizeof(png2), fp)) == sizeof(png2)) {
+		result->readsize += len;
 		rest = needswap ? swap32(png2.length) : png2.length;
 		rest -= sizeof(png2);
 		type = needswap ? swap32(png2.block_type) : png2.block_type;
 		len = fread(buff, 1, rest, fp);
+		result->readsize += len;
 		if (len != rest) return -1;
 		//printf("type=%d len=%d\n", type, len);
-		//hexdump("data", c->raw, rest);
+		//hexdump("data\n", buff, rest);
+		//fflush(stdout);
 		if (type == 6) {
 			png6p = (struct pcapng_type6 *)&buff;
 			t64 = ((unsigned long long)(needswap?swap32(png6p->tv_h):png6p->tv_h) << 32) + (needswap?swap32(png6p->tv_l):png6p->tv_l);
 			result->readsize += len;
 			result->end = t64;
-			if (result->start == 0) { result->start=result->end; }
+			if (result->start == 0) { result->start=t64; }
 			result->count++;
+			//print_t64(t64);
 		}
 	}
 	return 0;
@@ -218,15 +247,13 @@ int _parse_file(FILE *fp, pcap_result *result)
 	int i;
 	char *raw[NBUFF];
 
-	for (i = 0; i < NBUFF; i++)
-		if ((raw[i] = malloc(BSIZE)) == NULL) return -1;
-	len = fread(&pf, 1, sizeof(pf), fp);
+	len = fread(&pf, 1, PCAP_FIRST_READ, fp);
 	result->readsize = len;
 
  	if (len == 0) {
 		if (len == 0) return -1;
 	}
-	if (len != sizeof(pf)) {
+	if (len != PCAP_FIRST_READ) {
 		return -1;
 	}
 	needswap = 0;
@@ -235,7 +262,7 @@ int _parse_file(FILE *fp, pcap_result *result)
 		needswap = 1;
 	case 0xa1b2c3d4:
 		result->type = "pcap";
-		return read_pcap(fp, result, needswap);
+		return read_pcap(fp, &pf, result, needswap);
 		break;
 	case 0x0a0d0d0a: // pcapng mode
 		result->type = "pcapng";
@@ -243,6 +270,8 @@ int _parse_file(FILE *fp, pcap_result *result)
 		break;
 	}
 	/* Text mode */
+	for (i = 0; i < NBUFF; i++)
+		if ((raw[i] = malloc(BSIZE)) == NULL) return -1;
 	memcpy(raw[0], &pf, len);
 	if (fgets((char *)(raw[0] + len), BSIZE-len, fp) == NULL) return -1;
 	result->readsize = strlen(raw[0]);
@@ -289,7 +318,7 @@ static struct compressed_files
 int parse_file(char *file, pcap_result *result)
 {
 	FILE *fp;
-	int len, extlen, ret;
+	int len, extlen, ret, byte;
 	int close_status = 0;
 	struct compressed_files *cp = compressed_files;
 	char *p;
@@ -301,6 +330,7 @@ int parse_file(char *file, pcap_result *result)
 		result->mtime = sb.st_mtim.tv_sec * 1000000 + sb.st_mtim.tv_nsec / 1000;
 	}
 	len = strlen(file);
+	ret = 0;
 	while (cp->extention != NULL) {
 		extlen = strlen(cp->extention);
 		if (len>extlen && strcmp(file+len-extlen, cp->extention) == 0) {
@@ -308,8 +338,23 @@ int parse_file(char *file, pcap_result *result)
 			if ((fp = popen(buff, "r")) == NULL)
 				ret = -1;
 			else {
-				ret = _parse_file(fp, result);
-				close_status = pclose(fp);
+				byte = getc(fp);
+				if (byte == EOF) {
+					// l-root 2016 dataset has .gz extention,
+					// However, it is compressed by bzip2.
+					pclose(fp);
+					snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
+					if (strcmp(cp->extention, ".gz") != 0
+					|| (fp = popen(buff, "r")) == NULL) {
+						ret = -1;
+					}
+				} else {
+					ungetc(byte, fp);
+				}
+				if (ret != -1) {
+					ret = _parse_file(fp, result);
+					close_status = pclose(fp);
+				}
 			}
 			break;
 		}

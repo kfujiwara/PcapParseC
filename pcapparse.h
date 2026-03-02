@@ -1,5 +1,5 @@
 /*
-	$Id: pcapparse.h,v 1.126 2025/09/25 08:29:59 fujiwara Exp $
+	$Id: pcapparse.h,v 1.127 2026/01/27 08:23:23 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -45,6 +45,7 @@ struct case_stats
 	int uppercase;
 	int lowercase;
 	int nocase;
+	int binary_char;
 };
 
 struct DNSdata

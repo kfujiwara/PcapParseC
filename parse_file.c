@@ -1,5 +1,5 @@
 /*
-	$Id: parse_file.c,v 1.246 2025/05/08 05:02:07 fujiwara Exp $
+	$Id: parse_file.c,v 1.249 2025/12/25 10:26:26 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -113,6 +113,7 @@ int _parse_files(FILE *fp, struct DNSdataControl* c, int pass)
 		c->input_type = INPUT_TYPE_PCAP;
 		return parse_pcap(fp, c, (u_char *)&pf, needswap);
 	case 0x0a0d0d0a: // pcapng mode
+	case 0x0d0a0a0d: // pcapng mode
 		if (pass != 0) return ParsePcap_ForceClose;
 		c->input_type = INPUT_TYPE_PCAP;
 		return parse_pcapng(fp, c, (u_char *)&pf);
@@ -150,6 +151,7 @@ int parse_file(char *file, struct DNSdataControl* c, int pass)
 {
 	FILE *fp;
 	int len, extlen, ret;
+	int byte;
 	int close_status = 0;
 	char buff[1024];
 	struct compressed_files *cp = compressed_files;
@@ -173,6 +175,19 @@ int parse_file(char *file, struct DNSdataControl* c, int pass)
 			snprintf(buff, sizeof buff, cp->extractcmd, file);
 			if ((fp = popen(buff, "r")) == NULL)
 				return ParsePcap_ERROR_FILE_OPEN;
+			byte = getc(fp);
+			if (byte == EOF) {
+				// l-root 2016 dataset has .gz extention,
+				// However, it is compressed by bzip2.
+				pclose(fp);
+				snprintf(buff, sizeof buff, "bzip2 -cd %s", file);
+				if (strcmp(cp->extention, ".gz") != 0
+				|| (fp = popen(buff, "r")) == NULL) {
+					return ParsePcap_ERROR_FILE_OPEN;
+				}
+			} else {
+				ungetc(byte, fp);
+			}
 			ret = _parse_files(fp, c, pass);
 			close_status = pclose(fp);
 			break;
@@ -185,6 +200,7 @@ int parse_file(char *file, struct DNSdataControl* c, int pass)
 		ret = _parse_files(fp, c, pass);
 		close_status = fclose(fp);
 	}
+	if (c->exit != 0) return 0;
 	if (ret == 0 && close_status > 0) {
 		fprintf(stderr, "pclose_returned=%d cmd=%s errno=%d\n", close_status, buff[0]==0?file:buff, errno);
 		return ParsePcap_ERROR_COMMAND;
