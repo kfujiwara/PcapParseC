@@ -1,5 +1,5 @@
 /*
-	$Id: pcapgetquery.c,v 1.195 2026/02/19 10:42:57 fujiwara Exp $
+	$Id: pcapgetquery.c,v 1.196 2026/03/30 10:31:50 fujiwara Exp $
 
 	Author: Kazunori Fujiwara <fujiwara@jprs.co.jp>
 
@@ -63,6 +63,7 @@ int parsed_queries = 0;
 int do_print_dns_answer = 0;
 int do_print_hexdump = 0;
 int both_direction = 0;
+int reverse_direction = 0;
 int print_limit = 0;
 
 int ignore_broken = 0;
@@ -649,27 +650,44 @@ int pcapgetquery_callback(struct DNSdataControl *d, int mode)
 	struct name_hash *e;
 
 	if (both_direction) {
-		if (src_list.hash != NULL) {
+		if (dst_list.hash != NULL && src_list.hash != NULL) {
 			is1 = match_ipaddr_port(&src_list, d->dns.portaddr, d->dns.alen);
 			id1 = match_ipaddr_port(&src_list, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen);
-			match_src_hash = (is1!=NULL?_src_addr:0)|(id1!=NULL?_dest_addr:0);
-			if (match_src_hash == 0) return 0;
-			i1 = (is1 != NULL) ? is1 : id1;
-		}
-		if (dst_list.hash != NULL) {
 			is2 = match_ipaddr_port(&dst_list, d->dns.portaddr, d->dns.alen);
 			id2 = match_ipaddr_port(&dst_list, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen);
-			match_dest_hash = (is2!=NULL?_src_addr:0)|(id2!=NULL?_dest_addr:0);
-			if (match_dest_hash == 0) return 0;
-			i2 = (is2 != NULL) ? is2 : id2;
-		}
-		if (src_list.hash != NULL && dst_list.hash != NULL) {
-			if (match_src_hash + match_dest_hash != _src_addr + _dest_addr)
+			if (!((is1 != NULL && id2 != NULL) || (id1 != NULL && is2 != NULL))) {
 				return 0;
+			}
+			i1 = (is1 != NULL) ? is1 : id1;
+			i2 = (is2 != NULL) ? is2 : id2;
+		} else
+		if (src_list.hash != NULL) { // dst_list.hash == NULL
+			i1 = match_ipaddr_port(&src_list, d->dns.portaddr, d->dns.alen);
+			i2 = match_ipaddr_port(&src_list, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen);
+			if (i1 == NULL && i2 == NULL) { return 0; }
+		} else
+		if (dst_list.hash != NULL) { // src_list.hash == NULL
+			i1 = match_ipaddr_port(&dst_list, d->dns.portaddr, d->dns.alen);
+			i2 = match_ipaddr_port(&dst_list, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen);
+			if (i1 == NULL && i2 == NULL) { return 0; }
 		}
+		i1 = (is1 != NULL) ? is1 : id1;
+		i2 = (is2 != NULL) ? is2 : id2;
 		if (i1 != NULL) i1->count++;
 		if (i2 != NULL) i2->count++;
-    } else {
+	} else
+	if (reverse_direction) {
+		if (dst_list.hash != NULL) {
+			id1 = match_ipaddr_port(&dst_list, d->dns.portaddr, d->dns.alen);
+			if (id1 == NULL) return 0;
+			id1->count++;
+		}
+		if (src_list.hash != NULL) {
+			is2 = match_ipaddr_port(&src_list, d->dns.portaddr+d->dns.portaddrlen, d->dns.alen);
+			if (is2 == NULL) return 0;
+			is2->count++;
+		}
+	} else {
 		if (src_list.hash != NULL) {
 			is1 = match_ipaddr_port(&src_list, d->dns.portaddr, d->dns.alen);
 			if (is1 == NULL) return 0;
@@ -1013,6 +1031,7 @@ void parse_args(int argc, char **argv, char *env, struct DNSdataControl *c)
 	case 'Q': c->mode |= MODE_PARSE_QUERY; break;
 	case 'A':
 		c->mode |= MODE_PARSE_ANSWER | MODE_ANSWER_TTL_CNAME_PARSE;
+		reverse_direction = 1;
 		do_print_dns_answer++; break;
 	case 'Y': print_statistics = 1; break;
 	case 'y': print_filename = 1; break;
